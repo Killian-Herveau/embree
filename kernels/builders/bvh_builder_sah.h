@@ -19,6 +19,7 @@
 #include "heuristic_binning_array_aligned.h"
 #include "heuristic_spatial_array.h"
 #include "heuristic_openmerge_array.h"
+#include "../../include/embree3/rtcore_builder.h"
 
 #if defined(__AVX512F__)
 #  define NUM_OBJECT_BINS 16

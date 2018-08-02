@@ -18,6 +18,7 @@
 
 #include "rtcore_device.h"
 
+struct RTCBuildArguments;
 #if defined(__cplusplus)
 extern "C" {
 #endif
@@ -80,6 +81,13 @@ RTC_API void rtcSetSceneBuildQuality(RTCScene scene, enum RTCBuildQuality qualit
 
 /* Sets the scene flags. */
 RTC_API void rtcSetSceneFlags(RTCScene scene, enum RTCSceneFlags flags);
+
+/* Sets the scene next arguments for BVH. */
+RTC_API void rtc_AT_SetNextBVHArguments(RTCScene hscene,const struct RTCBuildArguments scene);
+
+/* Returns the scene next argumets for BVH. */
+RTC_API struct RTCBuildArguments rtc_AT_GetNextBVHArguments(RTCScene hscene);
+
 
 /* Returns the scene flags. */
 RTC_API enum RTCSceneFlags rtcGetSceneFlags(RTCScene scene);

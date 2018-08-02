@@ -214,7 +214,27 @@ namespace embree
     RTC_CATCH_END2(scene);
     return RTC_SCENE_FLAG_NONE;
   }
-  
+  RTC_API void rtc_AT_SetNextBVHArguments(RTCScene hscene, const RTCBuildArguments args)
+  {
+      Scene* scene = (Scene*) hscene;
+      RTC_CATCH_BEGIN;
+      RTC_TRACE(rtc_AT_SetNextBVHArguments);
+      RTC_VERIFY_HANDLE(hscene);
+      scene->buildArguments=args;
+      RTC_CATCH_END2(scene);
+  }
+
+  RTC_API RTCBuildArguments rtc_AT_GetNextBVHArguments(RTCScene hscene)
+  {
+      Scene* scene = (Scene*) hscene;
+      RTC_CATCH_BEGIN;
+      RTC_TRACE(rtc_AT_SetNextBVHArguments);
+      RTC_VERIFY_HANDLE(hscene);
+      RTC_CATCH_END2(scene);
+      return scene->buildArguments;
+
+  }
+
   RTC_API void rtcCommitScene (RTCScene hscene) 
   {
     Scene* scene = (Scene*) hscene;
