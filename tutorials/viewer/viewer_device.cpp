@@ -26,7 +26,6 @@ extern "C" bool g_changed;
 extern "C" int g_instancing_mode;
 
 /* scene data */
-RTCDevice g_device = nullptr;
 RTCScene g_scene = nullptr;
 bool g_subdiv_mode = false;
 
@@ -140,10 +139,11 @@ RTCScene convertScene(ISPCScene* scene_in)
   RTCScene scene_out = ConvertScene(g_device, g_ispc_scene, RTC_BUILD_QUALITY_MEDIUM);
 
   /* commit individual objects in case of instancing */
-  if (g_instancing_mode == ISPC_INSTANCING_SCENE_GEOMETRY || g_instancing_mode == ISPC_INSTANCING_SCENE_GROUP)
+  if (g_instancing_mode != ISPC_INSTANCING_NONE)
   {
     for (unsigned int i=0; i<scene_in->numGeometries; i++) {
-      if (scene_in->geomID_to_scene[i]) rtcCommitScene(scene_in->geomID_to_scene[i]);
+      ISPCGeometry* geometry = g_ispc_scene->geometries[i];
+      if (geometry->type == GROUP) rtcCommitScene(geometry->scene);
     }
   }
 
@@ -174,6 +174,16 @@ void postIntersectGeometry(const Ray& ray, DifferentialGeometry& dg, ISPCGeometr
     ISPCHairSet* mesh = (ISPCHairSet*) geometry;
     materialID = mesh->geom.materialID;
   }
+  else if (geometry->type == GRID_MESH)
+  {
+    ISPCGridMesh* mesh = (ISPCGridMesh*) geometry;
+    materialID = mesh->geom.materialID;
+  }
+  else if (geometry->type == POINTS)
+  {
+    ISPCPointSet* set = (ISPCPointSet*) geometry;
+    materialID = set->geom.materialID;
+  }
   else if (geometry->type == GROUP) {
     unsigned int geomID = ray.geomID; {
       postIntersectGeometry(ray,dg,((ISPCGroup*) geometry)->geometries[geomID],materialID);
@@ -196,15 +206,17 @@ AffineSpace3fa calculate_interpolated_space (ISPCInstance* instance, float gtime
   return (1.0f-ftime)*AffineSpace3fa(instance->spaces[itime+0]) + ftime*AffineSpace3fa(instance->spaces[itime+1]);
 }
 
+typedef ISPCInstance* ISPCInstancePtr;
+
 inline int postIntersect(const Ray& ray, DifferentialGeometry& dg)
 {
   int materialID = 0;
   unsigned int instID = ray.instID; {
     unsigned int geomID = ray.geomID; {
       ISPCGeometry* geometry = nullptr;
-      if (g_instancing_mode == ISPC_INSTANCING_SCENE_GEOMETRY || g_instancing_mode == ISPC_INSTANCING_SCENE_GROUP) {
-        ISPCInstance* instance = g_ispc_scene->geomID_to_inst[instID];
-        geometry = g_ispc_scene->geometries[instance->geom.geomID];
+      if (g_instancing_mode != ISPC_INSTANCING_NONE) {
+        ISPCInstance* instance = (ISPCInstancePtr) g_ispc_scene->geometries[instID];
+        geometry = instance->child;
       } else {
         geometry = g_ispc_scene->geometries[geomID];
       }
@@ -217,7 +229,7 @@ inline int postIntersect(const Ray& ray, DifferentialGeometry& dg)
     unsigned int instID = ray.instID;
     {
       /* get instance and geometry pointers */
-      ISPCInstance* instance = g_ispc_scene->geomID_to_inst[instID];
+      ISPCInstance* instance = (ISPCInstancePtr) g_ispc_scene->geometries[instID];
 
       /* convert normals */
       //AffineSpace3fa space = (1.0f-ray.time())*AffineSpace3fa(instance->space0) + ray.time()*AffineSpace3fa(instance->space1);
@@ -341,13 +353,6 @@ Vec3fa old_p;
 /* called by the C++ code for initialization */
 extern "C" void device_init (char* cfg)
 {
-  /* create new Embree device */
-  g_device = rtcNewDevice(cfg);
-  error_handler(nullptr,rtcGetDeviceError(g_device));
-
-  /* set error handler */
-  rtcSetDeviceErrorFunction(g_device,error_handler,nullptr);
-
   /* set start render mode */
   renderTile = renderTileStandard;
   key_pressed_handler = device_key_pressed_handler;
@@ -401,7 +406,6 @@ extern "C" void device_render (int* pixels,
 extern "C" void device_cleanup ()
 {
   rtcReleaseScene (g_scene); g_scene = nullptr;
-  rtcReleaseDevice(g_device); g_device = nullptr;
 }
 
 } // namespace embree

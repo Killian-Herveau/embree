@@ -47,7 +47,7 @@ namespace embree
     return stored_error;
   }
 
-  State::State (bool singledevice) 
+  State::State () 
     : enabled_cpu_features(getCPUFeatures()),
       enabled_builder_cpu_features(enabled_cpu_features)
   {
@@ -97,15 +97,13 @@ namespace embree
 
     tessellation_cache_size = 128*1024*1024;
 
-    /* large default cache size only for old mode single device mode */
-#if defined(__X86_64__)
-      if (singledevice) tessellation_cache_size = 1024*1024*1024;
-#else
-      if (singledevice) tessellation_cache_size = 128*1024*1024;
-#endif
-
     subdiv_accel = "default";
     subdiv_accel_mb = "default";
+
+    grid_accel = "default";
+    grid_builder = "default";
+    grid_accel_mb = "default";
+    grid_builder_mb = "default";
 
     instancing_open_min = 0;
     instancing_block_size = 0;
@@ -379,6 +377,11 @@ namespace embree
         subdiv_accel = cin->get().Identifier();
       else if (tok == Token::Id("subdiv_accel_mb") && cin->trySymbol("="))
         subdiv_accel_mb = cin->get().Identifier();
+
+      else if (tok == Token::Id("grid_accel") && cin->trySymbol("="))
+        grid_accel = cin->get().Identifier();
+      else if (tok == Token::Id("grid_accel_mb") && cin->trySymbol("="))
+        grid_accel_mb = cin->get().Identifier();
       
       else if (tok == Token::Id("verbose") && cin->trySymbol("="))
         verbose = cin->get().Int();
@@ -489,6 +492,14 @@ namespace embree
     
     std::cout << "subdivision surfaces:" << std::endl;
     std::cout << "  accel         = " << subdiv_accel << std::endl;
+
+    std::cout << "grids:" << std::endl;
+    std::cout << "  accel         = " << grid_accel << std::endl;
+    std::cout << "  builder       = " << grid_builder << std::endl;
+
+    std::cout << "motion blur grids:" << std::endl;
+    std::cout << "  accel         = " << grid_accel_mb << std::endl;
+    std::cout << "  builder       = " << grid_builder_mb << std::endl;
 
     std::cout << "object_accel:" << std::endl;
     std::cout << "  min_leaf_size = " << object_accel_min_leaf_size << std::endl;

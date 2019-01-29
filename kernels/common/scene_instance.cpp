@@ -19,26 +19,16 @@
 
 namespace embree
 {
-  DECLARE_SYMBOL2(RTCBoundsFunction,InstanceBoundsFunc);
-  DECLARE_SYMBOL2(AccelSet::IntersectorN,InstanceIntersectorN);
+#if defined(EMBREE_LOWEST_ISA)
 
-  InstanceFactory::InstanceFactory(int features)
-  {
-    SELECT_SYMBOL_DEFAULT_AVX_AVX2(features,InstanceBoundsFunc);
-    SELECT_SYMBOL_DEFAULT_AVX_AVX2_AVX512KNL_AVX512SKX(features,InstanceIntersectorN);
-  }
-
-  Instance::Instance (Device* device, Scene* object, unsigned int numTimeSteps) 
-    : AccelSet(device,1,numTimeSteps), object(object), local2world(nullptr)
+  Instance::Instance (Device* device, Accel* object, unsigned int numTimeSteps) 
+    : Geometry(device,Geometry::GTY_INSTANCE,1,numTimeSteps), object(object), local2world(nullptr)
   {
     if (object) object->refInc();
     world2local0 = one;
     local2world = (AffineSpace3fa*) alignedMalloc(numTimeSteps*sizeof(AffineSpace3fa),16);
     for (size_t i = 0; i < numTimeSteps; i++)
       local2world[i] = one;
-    intersectors.ptr = this;
-    boundsFunc = device->instance_factory->InstanceBoundsFunc();
-    intersectors.intersectorN = device->instance_factory->InstanceIntersectorN();
   }
 
   Instance::~Instance()
@@ -47,6 +37,16 @@ namespace embree
     if (object) object->refDec();
   }
 
+  void Instance::enabling () {
+    if (numTimeSteps == 1) scene->world.numInstances += numPrimitives;
+    else                   scene->worldMB.numInstances += numPrimitives;
+  }
+  
+  void Instance::disabling() { 
+    if (numTimeSteps == 1) scene->world.numInstances -= numPrimitives;
+    else                   scene->worldMB.numInstances -= numPrimitives;
+  }
+  
   void Instance::setNumTimeSteps (unsigned int numTimeSteps_in)
   {
     if (numTimeSteps_in == numTimeSteps)
@@ -86,12 +86,24 @@ namespace embree
 
   AffineSpace3fa Instance::getTransform(float time)
   {
-    return getWorld2Local(time);
+    if (likely(numTimeSteps <= 1))
+      return getLocal2World();
+    else
+      return getLocal2World(time);
   }
   
   void Instance::setMask (unsigned mask) 
   {
     this->mask = mask; 
     Geometry::update();
+  }
+  
+#endif
+
+  namespace isa
+  {
+    Instance* createInstance(Device* device) {
+      return new InstanceISA(device);
+    }
   }
 }

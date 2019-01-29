@@ -27,7 +27,7 @@ namespace embree
   {
   public:
     /*! state construction */
-    State (bool singledevice);
+    State ();
 
     /*! state destruction */
     ~State();
@@ -108,6 +108,12 @@ namespace embree
   public:
     std::string subdiv_accel;              //!< acceleration structure to use for subdivision surfaces
     std::string subdiv_accel_mb;           //!< acceleration structure to use for subdivision surfaces
+
+  public:
+    std::string grid_accel;              //!< acceleration structure to use for grids
+    std::string grid_builder;            //!< builder for grids
+    std::string grid_accel_mb;           //!< acceleration structure to use for motion blur grids
+    std::string grid_builder_mb;         //!< builder for motion blur grids
 
   public:
     float max_spatial_split_replications;  //!< maximally replications*N many primitives in accel for spatial splits

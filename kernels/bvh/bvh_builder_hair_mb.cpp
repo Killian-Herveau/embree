@@ -14,21 +14,21 @@
 // limitations under the License.                                           //
 // ======================================================================== //
 
-#include "../builders/bvh_builder_hair.h"
 #include "../builders/bvh_builder_msmblur_hair.h"
 #include "../builders/primrefgen.h"
 
-#include "../geometry/bezier1v.h"
-#include "../geometry/bezier1i.h"
+#include "../geometry/pointi.h"
+#include "../geometry/linei.h"
+#include "../geometry/curveNi_mb.h"
 
-#if defined(EMBREE_GEOMETRY_CURVE)
+#if defined(EMBREE_GEOMETRY_CURVE) || defined(EMBREE_GEOMETRY_POINT)
 
 namespace embree
 {
   namespace isa
   {
     /* FIXME: add fast path for single-segment motion blur */
-    template<int N, typename Primitive>
+    template<int N, typename CurvePrimitive, typename LinePrimitive, typename PointPrimitive>
     struct BVHNHairMBlurBuilderSAH : public Builder
     {
       typedef BVHN<N> BVH;
@@ -44,7 +44,7 @@ namespace embree
       void build() 
       {
         /* fast path for empty BVH */
-        const size_t numPrimitives = scene->getNumPrimitives<NativeCurves,true>();
+        const size_t numPrimitives = scene->getNumPrimitives<CurveGeometry,true>();
         if (numPrimitives == 0) {
           bvh->set(BVH::emptyNode,empty,0);
           return;
@@ -56,41 +56,40 @@ namespace embree
 
         /* create primref array */
         mvector<PrimRefMB> prims0(scene->device,numPrimitives);
-        const PrimInfoMB pinfo = createPrimRefArrayMSMBlur<NativeCurves>(scene,prims0,bvh->scene->progressInterface);
+        const PrimInfoMB pinfo = createPrimRefArrayMSMBlur(scene,Geometry::MTY_CURVES,prims0,bvh->scene->progressInterface);
 
         /* estimate acceleration structure size */
         const size_t node_bytes = pinfo.num_time_segments*sizeof(typename BVH::AlignedNodeMB)/(4*N);
-        const size_t leaf_bytes = size_t(1.2*Primitive::blocks(pinfo.num_time_segments)*sizeof(Primitive));
+        const size_t leaf_bytes = CurvePrimitive::bytes(pinfo.num_time_segments);
         bvh->alloc.init_estimate(node_bytes+leaf_bytes);
     
         /* settings for BVH build */
         BVHBuilderHairMSMBlur::Settings settings;
         settings.branchingFactor = N;
         settings.maxDepth = BVH::maxBuildDepthLeaf;
-        settings.logBlockSize = 1;
-        settings.minLeafSize = 1;
-        settings.maxLeafSize = BVH::maxLeafBlocks;
+        settings.logBlockSize = bsf(CurvePrimitive::max_size());
+        settings.minLeafSize = CurvePrimitive::max_size();
+        settings.maxLeafSize = CurvePrimitive::max_size();
 
         /* creates a leaf node */
-        auto createLeaf = [&] (const SetMB& prims, const FastAllocator::CachedAllocator& alloc) -> NodeRecordMB4D
-          {
-            size_t start = prims.object_range.begin();
-            size_t end   = prims.object_range.end();
-            size_t items = prims.object_range.size();
-            Primitive* accel = (Primitive*) alloc.malloc1(items*sizeof(Primitive));
-            const NodeRef node = bvh->encodeLeaf((char*)accel,items);
+        auto createLeaf = [&] (const SetMB& prims, const FastAllocator::CachedAllocator& alloc) -> NodeRecordMB4D {
 
-            LBBox3fa bounds = empty;
-            for (size_t i=0; i<items; i++)
-              bounds.extend(accel[i].fillMB(prims.prims->data(),start,end,bvh->scene,prims.time_range));
-            
-            return NodeRecordMB4D(node,bounds,prims.time_range);
-          };
+          if (prims.size() == 0)
+            return NodeRecordMB4D(BVH::emptyNode,empty,empty);
+          
+          const unsigned int geomID0 = (*prims.prims)[prims.begin()].geomID();
+          if (scene->get(geomID0)->getTypeMask() & Geometry::MTY_POINTS)
+            return PointPrimitive::createLeafMB(bvh,prims,alloc);
+          else if (scene->get(geomID0)->getCurveBasis() == Geometry::GTY_BASIS_LINEAR)
+            return LinePrimitive::createLeafMB(bvh,prims,alloc);
+          else
+            return CurvePrimitive::createLeafMB(bvh,prims,alloc);
+        };
 
         /* build the hierarchy */
         auto root = BVHBuilderHairMSMBlur::build<NodeRef>
           (scene, prims0, pinfo,
-           RecalculatePrimRef<NativeCurves>(scene),
+           VirtualRecalculatePrimRef(scene),
            typename BVH::CreateAlloc(bvh),
            typename BVH::AlignedNodeMB4D::Create(),
            typename BVH::AlignedNodeMB4D::Set(),
@@ -115,10 +114,11 @@ namespace embree
     };
     
     /*! entry functions for the builder */
-    Builder* BVH4OBBBezier1iMBBuilder_OBB (void* bvh, Scene* scene, size_t mode) { return new BVHNHairMBlurBuilderSAH<4,Bezier1i>((BVH4*)bvh,scene); }
+    Builder* BVH4OBBCurve4iMBBuilder_OBB (void* bvh, Scene* scene, size_t mode) { return new BVHNHairMBlurBuilderSAH<4,Curve4iMB,Line4i,Point4i>((BVH4*)bvh,scene); }
 
 #if defined(__AVX__)
-    Builder* BVH8OBBBezier1iMBBuilder_OBB (void* bvh, Scene* scene, size_t mode) { return new BVHNHairMBlurBuilderSAH<8,Bezier1i>((BVH8*)bvh,scene); }
+    Builder* BVH4OBBCurve8iMBBuilder_OBB (void* bvh, Scene* scene, size_t mode) { return new BVHNHairMBlurBuilderSAH<4,Curve8iMB,Line8i,Point8i>((BVH4*)bvh,scene); }
+    Builder* BVH8OBBCurve8iMBBuilder_OBB (void* bvh, Scene* scene, size_t mode) { return new BVHNHairMBlurBuilderSAH<8,Curve8iMB,Line8i,Point8i>((BVH8*)bvh,scene); }
 #endif
 
   }

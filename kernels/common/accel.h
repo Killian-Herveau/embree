@@ -27,6 +27,7 @@ namespace embree
   /*! Base class for the acceleration structure data. */
   class AccelData : public RefCount 
   {
+    ALIGNED_CLASS_(16);
   public:
     enum Type { TY_UNKNOWN = 0, TY_ACCELN = 1, TY_ACCEL_INSTANCE = 2, TY_BVH4 = 3, TY_BVH8 = 4 };
 
@@ -45,9 +46,19 @@ namespace embree
       return bounds.bounds();
     }
 
+    /*! returns bounds for some time */
+    __forceinline BBox3fa getBounds(float t) const {
+      return bounds.interpolate(t);
+    }
+
     /*! returns linear bounds */
     __forceinline LBBox3fa getLinearBounds() const {
       return bounds;
+    }
+
+    /*! checks if acceleration structure is empty */
+    __forceinline bool isEmpty() const {
+      return bounds.bounds0.lower.x == float(pos_inf);
     }
 
   public:
@@ -58,7 +69,7 @@ namespace embree
   /*! Base class for all intersectable and buildable acceleration structures. */
   class Accel : public AccelData
   {
-    ALIGNED_CLASS;
+     ALIGNED_CLASS_(16);
   public:
 
     struct Intersectors;
@@ -211,10 +222,10 @@ namespace embree
     struct Intersectors 
     {
       Intersectors() 
-        : ptr(nullptr) {}
+        : ptr(nullptr), leafIntersector(nullptr), intersector1(nullptr), intersector4(nullptr), intersector8(nullptr), intersector16(nullptr), intersectorN(nullptr) {}
 
       Intersectors (ErrorFunc error) 
-      : ptr(nullptr), intersector1(error), intersector4(error), intersector8(error), intersector16(error), intersectorN(error) {}
+      : ptr(nullptr), leafIntersector(nullptr), intersector1(error), intersector4(error), intersector8(error), intersector16(error), intersectorN(error) {}
 
       void print(size_t ident) 
       {
@@ -391,6 +402,7 @@ namespace embree
       
     public:
       AccelData* ptr;
+      void* leafIntersector;
       Intersector1 intersector1;
       Intersector4 intersector4;
       Intersector4 intersector4_filter;

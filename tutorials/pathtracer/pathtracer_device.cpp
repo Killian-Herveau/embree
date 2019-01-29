@@ -38,7 +38,10 @@ namespace embree {
 #define MAX_EDGE_LEVEL 128.0f
 #define MIN_EDGE_LEVEL   4.0f
 #define LEVEL_FACTOR    64.0f
-#define MAX_PATH_LENGTH  8
+
+extern "C" int g_spp;
+extern "C" int g_max_path_length;
+extern "C" bool g_accumulate;
 
 bool g_subdiv_mode = false;
 unsigned int keyframeID = 0;
@@ -102,16 +105,6 @@ inline Vec3fa sample_component2(const Vec3fa& c0, const Sample3f& wi0, const Med
     wi_o = make_Sample3f(wi1.v,wi1.pdf*CP1);
     medium_o = medium1; return c1;
   }
-}
-
-/*! Cosine weighted hemisphere sampling. Up direction is provided as argument. */
-inline Sample3f cosineSampleHemisphere(const float  u, const float  v, const Vec3fa& N)
-{
-  Vec3fa localDir = cosineSampleHemisphere(Vec2f(u,v));
-  Sample3f s;
-  s.v = frame(N) * localDir;
-  s.pdf = cosineSampleHemispherePDF(localDir);
-  return s;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -861,10 +854,7 @@ inline Vec3fa Material__sample(ISPCMaterial** materials, unsigned int materialID
 
 /* scene data */
 extern "C" ISPCScene* g_ispc_scene;
-RTCDevice g_device = nullptr;
 RTCScene g_scene = nullptr;
-extern "C" int g_spp;
-extern "C" bool g_accumulate;
 
 /* occlusion filter function */
 void intersectionFilterReject(const RTCFilterFunctionNArguments* args);
@@ -947,6 +937,25 @@ void assignShaders(ISPCGeometry* geometry)
       }
     }
   }
+  else if (geometry->type == GRID_MESH)
+  {
+    ISPCGridMesh* mesh = (ISPCGridMesh*) geometry;
+    rtcSetGeometryOccludedFilterFunction(geom,occlusionFilterOpaque);
+
+    ISPCMaterial* material = g_ispc_scene->materials[mesh->geom.materialID];
+    //if (material->type == MATERIAL_DIELECTRIC || material->type == MATERIAL_THIN_DIELECTRIC)
+    //  rtcSetGeometryOccludedFilterFunction(geom,intersectionFilterReject);
+    //else
+    if (material->type == MATERIAL_OBJ)
+    {
+      ISPCOBJMaterial* obj = (ISPCOBJMaterial*) material;
+      if (obj->d != 1.0f || obj->map_d) {
+        rtcSetGeometryIntersectFilterFunction(geom,intersectionFilterOBJ);
+        rtcSetGeometryOccludedFilterFunction   (geom,occlusionFilterOBJ);
+      }
+    }
+  }
+
   else if (geometry->type == CURVES)
   {
     rtcSetGeometryOccludedFilterFunction(geom,occlusionFilterHair);
@@ -980,10 +989,11 @@ RTCScene convertScene(ISPCScene* scene_in)
   }
 
   /* commit individual objects in case of instancing */
-  if (g_instancing_mode == ISPC_INSTANCING_SCENE_GEOMETRY || g_instancing_mode == ISPC_INSTANCING_SCENE_GROUP)
+  if (g_instancing_mode != ISPC_INSTANCING_NONE)
   {
     for (unsigned int i=0; i<scene_in->numGeometries; i++) {
-      if (scene_in->geomID_to_scene[i]) rtcCommitScene(scene_in->geomID_to_scene[i]);
+      ISPCGeometry* geometry = g_ispc_scene->geometries[i];
+      if (geometry->type == GROUP) rtcCommitScene(geometry->scene);
     }
   }
 
@@ -1002,27 +1012,132 @@ inline Vec3fa face_forward(const Vec3fa& dir, const Vec3fa& _Ng) {
   return dot(dir,Ng) < 0.0f ? Ng : neg(Ng);
 }
 
-inline void evalBezier(const ISPCHairSet* hair, const int primID, const float t, Vec3fa& p, Vec3fa& dp)
+inline Vec3fa derivBezier(const ISPCHairSet* mesh, const unsigned int primID, const float t, const float time)
 {
+  Vec3fa p00, p01, p02, p03;
+  const int i = mesh->hairs[primID].vertex;
+  
+  if (mesh->numTimeSteps == 1)
+  {
+    p00 = mesh->positions[0][i+0];
+    p01 = mesh->positions[0][i+1];
+    p02 = mesh->positions[0][i+2];
+    p03 = mesh->positions[0][i+3];
+  }
+  else
+  {
+    float f = mesh->numTimeSteps*time;
+    int itime = clamp((int)floor(f),0,(int)mesh->numTimeSteps-2);
+    float t1 = f-itime;
+    float t0 = 1.0f-t1;
+    const Vec3fa a0 = mesh->positions[itime+0][i+0];
+    const Vec3fa a1 = mesh->positions[itime+0][i+1];
+    const Vec3fa a2 = mesh->positions[itime+0][i+2];
+    const Vec3fa a3 = mesh->positions[itime+0][i+3];
+    const Vec3fa b0 = mesh->positions[itime+1][i+0];
+    const Vec3fa b1 = mesh->positions[itime+1][i+1];
+    const Vec3fa b2 = mesh->positions[itime+1][i+2];
+    const Vec3fa b3 = mesh->positions[itime+1][i+3];
+    p00 = t0*a0 + t1*b0;
+    p01 = t0*a1 + t1*b1;
+    p02 = t0*a2 + t1*b2;
+    p03 = t0*a3 + t1*b3;
+  }
+
   const float t0 = 1.0f - t, t1 = t;
-  const Vec3fa* vertices = hair->positions[0];
-  const ISPCHair* hairs = hair->hairs;
-
-  const int i = hairs[primID].vertex;
-  const Vec3fa p00 = vertices[i+0];
-  const Vec3fa p01 = vertices[i+1];
-  const Vec3fa p02 = vertices[i+2];
-  const Vec3fa p03 = vertices[i+3];
-
   const Vec3fa p10 = p00 * t0 + p01 * t1;
   const Vec3fa p11 = p01 * t0 + p02 * t1;
   const Vec3fa p12 = p02 * t0 + p03 * t1;
   const Vec3fa p20 = p10 * t0 + p11 * t1;
   const Vec3fa p21 = p11 * t0 + p12 * t1;
-  const Vec3fa p30 = p20 * t0 + p21 * t1;
+  //const Vec3fa p30 = p20 * t0 + p21 * t1;
+  return Vec3fa(3.0f*(p21-p20));
+}
 
-  p = p30;
-  dp = 3.0f*(p21-p20);
+inline Vec3fa derivHermite(const ISPCHairSet* mesh, const unsigned int primID, const float u, const float time)
+{
+  Vec3fa p0, p1, t0, t1;
+  const int i = mesh->hairs[primID].vertex;
+  
+  if (mesh->numTimeSteps == 1)
+  {
+    p0 = mesh->positions[0][i+0];
+    p1 = mesh->positions[0][i+1];
+    t0 = mesh->tangents[0][i+0];
+    t1 = mesh->tangents[0][i+1];
+  }
+  else
+  {
+    float f = mesh->numTimeSteps*time;
+    int itime = clamp((int)floor(f),0,(int)mesh->numTimeSteps-2);
+    float time1 = f-itime;
+    float time0 = 1.0f-time1;
+    const Vec3fa ap0 = mesh->positions[itime+0][i+0];
+    const Vec3fa ap1 = mesh->positions[itime+0][i+1];
+    const Vec3fa at0 = mesh->tangents[itime+0][i+0];
+    const Vec3fa at1 = mesh->tangents[itime+0][i+1];
+    const Vec3fa bp0 = mesh->positions[itime+1][i+0];
+    const Vec3fa bp1 = mesh->positions[itime+1][i+1];
+    const Vec3fa bt0 = mesh->tangents[itime+1][i+0];
+    const Vec3fa bt1 = mesh->tangents[itime+1][i+1];
+    p0 = time0*ap0 + time1*bp0;
+    p1 = time0*ap1 + time1*bp1;
+    t0 = time0*at0 + time1*bt0;
+    t1 = time0*at1 + time1*bt1;
+  }
+  const Vec3fa p00 = p0;
+  const Vec3fa p01 = p0+(1.0f/3.0f)*t0;
+  const Vec3fa p02 = p1-(1.0f/3.0f)*t1;
+  const Vec3fa p03 = p1;
+    
+  const float u0 = 1.0f - u, u1 = u;
+  const Vec3fa p10 = p00 * u0 + p01 * u1;
+  const Vec3fa p11 = p01 * u0 + p02 * u1;
+  const Vec3fa p12 = p02 * u0 + p03 * u1;
+  const Vec3fa p20 = p10 * u0 + p11 * u1;
+  const Vec3fa p21 = p11 * u0 + p12 * u1;
+  //const Vec3fa p30 = p20 * u0 + p21 * u1;
+  return Vec3fa(3.0f*(p21-p20));
+}
+
+inline Vec3fa derivBSpline(const ISPCHairSet* mesh, const unsigned int primID, const float t, const float time)
+{
+  Vec3fa p00, p01, p02, p03;
+  const int i = mesh->hairs[primID].vertex;
+  
+  if (mesh->numTimeSteps == 1)
+  {
+    p00 = mesh->positions[0][i+0];
+    p01 = mesh->positions[0][i+1];
+    p02 = mesh->positions[0][i+2];
+    p03 = mesh->positions[0][i+3];
+  }
+  else
+  {
+    float f = mesh->numTimeSteps*time;
+    int itime = clamp((int)floor(f),0,(int)mesh->numTimeSteps-2);
+    float t1 = f-itime;
+    float t0 = 1.0f-t1;
+    const Vec3fa a0 = mesh->positions[itime+0][i+0];
+    const Vec3fa a1 = mesh->positions[itime+0][i+1];
+    const Vec3fa a2 = mesh->positions[itime+0][i+2];
+    const Vec3fa a3 = mesh->positions[itime+0][i+3];
+    const Vec3fa b0 = mesh->positions[itime+1][i+0];
+    const Vec3fa b1 = mesh->positions[itime+1][i+1];
+    const Vec3fa b2 = mesh->positions[itime+1][i+2];
+    const Vec3fa b3 = mesh->positions[itime+1][i+3];
+    p00 = t0*a0 + t1*b0;
+    p01 = t0*a1 + t1*b1;
+    p02 = t0*a2 + t1*b2;
+    p03 = t0*a3 + t1*b3;
+  }
+
+  const float t0 = 1.0f - t, t1 = t;
+  const float n0 = -0.5f*t1*t1;
+  const float n1 = -0.5f*t0*t0 - 2.0f*(t0*t1);
+  const float n2 =  0.5f*t1*t1 + 2.0f*(t1*t0);
+  const float n3 =  0.5f*t0*t0;
+  return Vec3fa(n0*p00 + n1*p01 + n2*p02 + n3*p03);
 }
 
 void postIntersectGeometry(const Ray& ray, DifferentialGeometry& dg, ISPCGeometry* geometry, int& materialID)
@@ -1159,55 +1274,72 @@ void postIntersectGeometry(const Ray& ray, DifferentialGeometry& dg, ISPCGeometr
     dg.u = st.x;
     dg.v = st.y;
   }
+  else if (geometry->type == GRID_MESH)
+  {
+    ISPCGridMesh* mesh = (ISPCGridMesh*) geometry;
+    materialID = mesh->geom.materialID;
+  }
   else if (geometry->type == CURVES)
   {
     ISPCHairSet* mesh = (ISPCHairSet*) geometry;
+    materialID = mesh->geom.materialID;
     
     if (mesh->type == RTC_GEOMETRY_TYPE_FLAT_LINEAR_CURVE)
     {
-      materialID = mesh->geom.materialID;
-      const Vec3fa dx = normalize(dg.Ng);
-      const Vec3fa dy = normalize(cross(neg(ray.dir),dx));
-      const Vec3fa dz = normalize(cross(dy,dx));
-      dg.Tx = dx;
-      dg.Ty = dy;
-      dg.Ng = dg.Ns = dz;
+      dg.Tx = normalize(dg.Ng);
+      dg.Ty = normalize(cross(neg(ray.dir),dg.Tx));
+      dg.Ng = normalize(cross(dg.Ty,dg.Tx));
     }
-    else if (mesh->type == RTC_GEOMETRY_TYPE_ROUND_BEZIER_CURVE ||
-             mesh->type == RTC_GEOMETRY_TYPE_FLAT_BEZIER_CURVE ||
-             mesh->type == RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE ||
-             mesh->type == RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE)
+    else if (mesh->type == RTC_GEOMETRY_TYPE_ROUND_BEZIER_CURVE)
     {
-      ISPCHairSet* mesh = (ISPCHairSet*) geometry;
-      materialID = mesh->geom.materialID;
-      Vec3fa p,dp; evalBezier(mesh,dg.primID,ray.u,p,dp); // FIXME: this is wrong for bspline basis
-      if (length(dp) < 1E-6f) { // some hair are just points
-        dg.Tx = Vec3fa(1,0,0);
-        dg.Ty = Vec3fa(0,1,0);
-        dg.Ng = dg.Ns = Vec3fa(0,0,1);
-      }
-      else if (mesh->type == RTC_GEOMETRY_TYPE_FLAT_BEZIER_CURVE ||
-               mesh->type == RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE)
-      {
-        if (reduce_max(abs(dg.Ng)) < 1E-6f) dg.Ng = Vec3fa(1,1,1);
-        const Vec3fa dx = normalize(dg.Ng);
-        const Vec3fa dy = normalize(cross(neg(ray.dir),dx));
-        const Vec3fa dz = normalize(cross(dy,dx));
-        dg.Tx = dx;
-        dg.Ty = dy;
-        dg.Ng = dg.Ns = dz;
-      }
-      else if (mesh->type == RTC_GEOMETRY_TYPE_ROUND_BEZIER_CURVE ||
-               mesh->type == RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE)
-      {
-        const Vec3fa dx = normalize(Vec3fa(dp));
-        const Vec3fa dy = normalize(cross(Vec3fa(dp),dg.Ng));
-        const Vec3fa dz = normalize(dg.Ng);
-        dg.Tx = dx;
-        dg.Ty = dy;
-        dg.Ng = dg.Ns = dz;
-        dg.eps = 1024.0f*1.19209e-07f*max(max(abs(dg.P.x),abs(dg.P.y)),max(abs(dg.P.z),ray.tfar));
-      }
+      Vec3fa dp = derivBezier(mesh,dg.primID,ray.u,ray.time());
+      if (reduce_max(abs(dp)) < 1E-6f) dp = Vec3fa(1,1,1);
+      dg.Tx = normalize(Vec3fa(dp));
+      dg.Ty = normalize(cross(Vec3fa(dp),dg.Ng));
+      dg.Ng = dg.Ns = normalize(dg.Ng);
+      dg.eps = 1024.0f*1.19209e-07f*max(max(abs(dg.P.x),abs(dg.P.y)),max(abs(dg.P.z),ray.tfar));
+    }
+    else if (mesh->type == RTC_GEOMETRY_TYPE_FLAT_BEZIER_CURVE)
+    {
+      Vec3fa dp = derivBezier(mesh,dg.primID,ray.u,ray.time());
+      if (reduce_max(abs(dp)) < 1E-6f) dp = Vec3fa(1,1,1);
+      dg.Tx = normalize(dp);
+      dg.Ty = normalize(cross(neg(ray.dir),dg.Tx));
+      dg.Ng = dg.Ns = normalize(cross(dg.Ty,dg.Tx));
+    }
+    else if (mesh->type == RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE)
+    {
+      Vec3fa dp = derivBSpline(mesh,dg.primID,ray.u,ray.time());
+      if (reduce_max(abs(dp)) < 1E-6f) dp = Vec3fa(1,1,1);
+      dg.Tx = normalize(Vec3fa(dp));
+      dg.Ty = normalize(cross(Vec3fa(dp),dg.Ng));
+      dg.Ng = dg.Ns = normalize(dg.Ng);
+      dg.eps = 1024.0f*1.19209e-07f*max(max(abs(dg.P.x),abs(dg.P.y)),max(abs(dg.P.z),ray.tfar));
+    }
+    else if (mesh->type == RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE)
+    {
+      Vec3fa dp = derivBSpline(mesh,dg.primID,ray.u,ray.time());
+      if (reduce_max(abs(dp)) < 1E-6f) dp = Vec3fa(1,1,1);
+      dg.Tx = normalize(dp);
+      dg.Ty = normalize(cross(neg(ray.dir),dg.Tx));
+      dg.Ng = dg.Ns = normalize(cross(dg.Ty,dg.Tx));
+    }
+    else if (mesh->type == RTC_GEOMETRY_TYPE_ROUND_HERMITE_CURVE)
+    {
+      Vec3fa dp = derivHermite(mesh,dg.primID,ray.u,ray.time());
+      if (reduce_max(abs(dp)) < 1E-6f) dp = Vec3fa(1,1,1);
+      dg.Tx = normalize(Vec3fa(dp));
+      dg.Ty = normalize(cross(Vec3fa(dp),dg.Ng));
+      dg.Ng = dg.Ns = normalize(dg.Ng);
+      dg.eps = 1024.0f*1.19209e-07f*max(max(abs(dg.P.x),abs(dg.P.y)),max(abs(dg.P.z),ray.tfar));
+    }
+    else if (mesh->type == RTC_GEOMETRY_TYPE_FLAT_HERMITE_CURVE)
+    {
+      Vec3fa dp = derivHermite(mesh,dg.primID,ray.u,ray.time());
+      if (reduce_max(abs(dp)) < 1E-6f) dp = Vec3fa(1,1,1);
+      dg.Tx = normalize(dp);
+      dg.Ty = normalize(cross(neg(ray.dir),dg.Tx));
+      dg.Ng = dg.Ns = normalize(cross(dg.Ty,dg.Tx));
     }
   }
   else if (geometry->type == GROUP) {
@@ -1235,6 +1367,8 @@ AffineSpace3fa calculate_interpolated_space (ISPCInstance* instance, float gtime
   return (1.0f-ftime)*AffineSpace3fa(instance->spaces[itime+0]) + ftime*AffineSpace3fa(instance->spaces[itime+1]);
 }
 
+typedef ISPCInstance* ISPCInstancePtr;
+
 inline int postIntersect(const Ray& ray, DifferentialGeometry& dg)
 {
   dg.eps = 32.0f*1.19209e-07f*max(max(abs(dg.P.x),abs(dg.P.y)),max(abs(dg.P.z),ray.tfar));
@@ -1243,9 +1377,9 @@ inline int postIntersect(const Ray& ray, DifferentialGeometry& dg)
   unsigned int instID = dg.instID; {
     unsigned int geomID = dg.geomID; {
       ISPCGeometry* geometry = nullptr;
-      if (g_instancing_mode == ISPC_INSTANCING_SCENE_GEOMETRY || g_instancing_mode == ISPC_INSTANCING_SCENE_GROUP) {
-        ISPCInstance* instance = g_ispc_scene->geomID_to_inst[instID];
-        geometry = g_ispc_scene->geometries[instance->geom.geomID];
+      if (g_instancing_mode != ISPC_INSTANCING_NONE) {
+        ISPCInstance* instance = (ISPCInstancePtr) g_ispc_scene->geometries[instID];
+        geometry = instance->child;
       } else {
         geometry = g_ispc_scene->geometries[geomID];
       }
@@ -1258,7 +1392,7 @@ inline int postIntersect(const Ray& ray, DifferentialGeometry& dg)
     unsigned int instID = dg.instID;
     {
       /* get instance and geometry pointers */
-      ISPCInstance* instance = g_ispc_scene->geomID_to_inst[instID];
+      ISPCInstance* instance = (ISPCInstancePtr) g_ispc_scene->geometries[instID];
 
       /* convert normals */
       //AffineSpace3fa space = (1.0f-ray.time())*AffineSpace3fa(instance->space0) + ray.time()*AffineSpace3fa(instance->space1);
@@ -1454,7 +1588,7 @@ Vec3fa renderPixelFunction(float x, float y, RandomSampler& sampler, const ISPCC
   DifferentialGeometry dg;
  
   /* iterative path tracer loop */
-  for (int i=0; i<MAX_PATH_LENGTH; i++)
+  for (int i=0; i<g_max_path_length; i++)
   {
     /* terminate if contribution too low */
     if (max(Lw.x,max(Lw.y,Lw.z)) < 0.01f)
@@ -1559,7 +1693,7 @@ Vec3fa renderPixelStandard(float x, float y, const ISPCCamera& camera, RayStats&
     float fy = y + RandomSampler_get1D(sampler);
     L = L + renderPixelFunction(fx,fy,sampler,camera,stats);
   }
-  L = L/g_spp;
+  L = L/(float)g_spp;
   return L;
 }
 
@@ -1589,9 +1723,9 @@ void renderTileStandard(int taskIndex,
     /* write color to framebuffer */
     Vec3fa accu_color = g_accu[y*width+x] + Vec3fa(color.x,color.y,color.z,1.0f); g_accu[y*width+x] = accu_color;
     float f = rcp(max(0.001f,accu_color.w));
-    unsigned int r = (unsigned int) (255.0f * clamp(accu_color.x*f,0.0f,1.0f));
-    unsigned int g = (unsigned int) (255.0f * clamp(accu_color.y*f,0.0f,1.0f));
-    unsigned int b = (unsigned int) (255.0f * clamp(accu_color.z*f,0.0f,1.0f));
+    unsigned int r = (unsigned int) (255.01f * clamp(accu_color.x*f,0.0f,1.0f));
+    unsigned int g = (unsigned int) (255.01f * clamp(accu_color.y*f,0.0f,1.0f));
+    unsigned int b = (unsigned int) (255.01f * clamp(accu_color.z*f,0.0f,1.0f));
     pixels[y*width+x] = (b << 16) + (g << 8) + r;
   }
 }
@@ -1679,13 +1813,6 @@ extern "C" void device_init (char* cfg)
   g_accu_vz = Vec3fa(0.0f);
   g_accu_p  = Vec3fa(0.0f);
 
-  /* create new Embree device */
-  g_device = rtcNewDevice(cfg);
-  error_handler(nullptr,rtcGetDeviceError(g_device));
-
-  /* set error handler */
-  rtcSetDeviceErrorFunction(g_device,error_handler,nullptr);
-
   /* set start render mode */
   renderTile = renderTileStandard;
   key_pressed_handler = device_key_pressed_handler;
@@ -1709,7 +1836,7 @@ extern "C" void device_render (int* pixels,
   /* create accumulator */
   if (g_accu_width != width || g_accu_height != height) {
     alignedFree(g_accu);
-    g_accu = (Vec3fa*) alignedMalloc(width*height*sizeof(Vec3fa));
+    g_accu = (Vec3fa*) alignedMalloc(width*height*sizeof(Vec3fa),16);
     g_accu_width = width;
     g_accu_height = height;
     for (unsigned int i=0; i<width*height; i++)
@@ -1752,7 +1879,6 @@ extern "C" void device_render (int* pixels,
 extern "C" void device_cleanup ()
 {
   rtcReleaseScene (g_scene); g_scene = nullptr;
-  rtcReleaseDevice(g_device); g_device = nullptr;
   alignedFree(g_accu); g_accu = nullptr;
   g_accu_width = 0;
   g_accu_height = 0;

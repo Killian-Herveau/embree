@@ -100,11 +100,11 @@ namespace embree
 
 #if defined(__SSE4_1__)
     static __forceinline vuint4 load(const unsigned char* ptr) {
-      return _mm_cvtepu8_epi32(_mm_load_si128((__m128i*)ptr));
+      return _mm_cvtepu8_epi32(_mm_loadl_epi64((__m128i*)ptr));
     }
 
     static __forceinline vuint4 loadu(const unsigned char* ptr) {
-      return  _mm_cvtepu8_epi32(_mm_loadu_si128((__m128i*)ptr));
+      return  _mm_cvtepu8_epi32(_mm_loadl_epi64((__m128i*)ptr));
     }
 
 #endif
@@ -188,7 +188,7 @@ namespace embree
 
     friend __forceinline vuint4 select(const vboolf4& m, const vuint4& t, const vuint4& f) {
 #if defined(__AVX512VL__)
-      return _mm_mask_blend_epi32(m, f, t);
+      return _mm_mask_blend_epi32(m, (__m128i)f, (__m128i)t);
 #elif defined(__SSE4_1__)
       return _mm_castps_si128(_mm_blendv_ps(_mm_castsi128_ps(f), _mm_castsi128_ps(t), m)); 
 #else
@@ -413,11 +413,11 @@ namespace embree
   __forceinline unsigned int reduce_max(const vuint4& v) { return toScalar(vreduce_max(v)); }
   __forceinline unsigned int reduce_add(const vuint4& v) { return toScalar(vreduce_add(v)); }
 
-  __forceinline size_t select_min(const vuint4& v) { return __bsf(movemask(v == vreduce_min(v))); }
-  __forceinline size_t select_max(const vuint4& v) { return __bsf(movemask(v == vreduce_max(v))); }
+  __forceinline size_t select_min(const vuint4& v) { return bsf(movemask(v == vreduce_min(v))); }
+  __forceinline size_t select_max(const vuint4& v) { return bsf(movemask(v == vreduce_max(v))); }
 
-  //__forceinline size_t select_min(const vboolf4& valid, const vuint4& v) { const vuint4 a = select(valid,v,vuint4(pos_inf)); return __bsf(movemask(valid & (a == vreduce_min(a)))); }
-  //__forceinline size_t select_max(const vboolf4& valid, const vuint4& v) { const vuint4 a = select(valid,v,vuint4(neg_inf)); return __bsf(movemask(valid & (a == vreduce_max(a)))); }
+  //__forceinline size_t select_min(const vboolf4& valid, const vuint4& v) { const vuint4 a = select(valid,v,vuint4(pos_inf)); return bsf(movemask(valid & (a == vreduce_min(a)))); }
+  //__forceinline size_t select_max(const vboolf4& valid, const vuint4& v) { const vuint4 a = select(valid,v,vuint4(neg_inf)); return bsf(movemask(valid & (a == vreduce_max(a)))); }
 
 #else
 

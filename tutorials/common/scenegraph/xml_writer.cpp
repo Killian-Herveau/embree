@@ -22,7 +22,7 @@ namespace embree
   {
   public:
 
-    XMLWriter(Ref<SceneGraph::Node> root, const FileName& fileName, bool embedTextures);
+    XMLWriter(Ref<SceneGraph::Node> root, const FileName& fileName, bool embedTextures, bool referenceMaterials);
 
   public:
     void tab();
@@ -82,6 +82,7 @@ namespace embree
     std::map<Ref<SceneGraph::Node>, size_t> nodeMap;   
     std::map<std::shared_ptr<Texture>, size_t> textureMap; // FIXME: use Ref<Texture>
     bool embedTextures;
+    bool referenceMaterials;
   };
 
   //////////////////////////////////////////////////////////////////////////////
@@ -380,6 +381,12 @@ namespace embree
 
   void XMLWriter::store(Ref<SceneGraph::MaterialNode> mnode)
   {
+    /* let materials reference by their name, allows separate bindings of materials */
+    if (referenceMaterials) {
+      tab(); xml << "<material id=\""+mnode->name+"\"/>" << std::endl;
+      return;
+    }
+    
     Ref<SceneGraph::Node> node = mnode.dynamicCast<SceneGraph::Node>();
     if (nodeMap.find(node) != nodeMap.end()) {
       tab(); xml << "<material id=\"" << nodeMap[node] << "\"/>" << std::endl;
@@ -404,10 +411,15 @@ namespace embree
   {
     open("TriangleMesh",id);
     store(mesh->material);
+    
     if (mesh->numTimeSteps() != 1) open("animated_positions");
     for (const auto& p : mesh->positions) store("positions",p);
     if (mesh->numTimeSteps() != 1) close("animated_positions");
-    store("normals",mesh->normals);
+
+    if (mesh->numTimeSteps() != 1) open("animated_normals");
+    for (const auto& p : mesh->normals) store("normals",p);
+    if (mesh->numTimeSteps() != 1) close("animated_normals");
+    
     store("texcoords",mesh->texcoords);
     store("triangles",mesh->triangles);
     close("TriangleMesh");
@@ -417,10 +429,15 @@ namespace embree
   {
     open("QuadMesh",id);
     store(mesh->material);
+    
     if (mesh->numTimeSteps() != 1) open("animated_positions");
     for (const auto& p : mesh->positions) store("positions",p);
     if (mesh->numTimeSteps() != 1) close("animated_positions");
-    store("normals",mesh->normals);
+
+    if (mesh->numTimeSteps() != 1) open("animated_normals");
+    for (const auto& p : mesh->normals) store("normals",p);
+    if (mesh->numTimeSteps() != 1) close("animated_normals");
+    
     store("texcoords",mesh->texcoords);
     store("indices",mesh->quads);
     close("QuadMesh");
@@ -430,10 +447,15 @@ namespace embree
   {
     open("SubdivisionMesh",id);
     store(mesh->material);
+    
     if (mesh->numTimeSteps() != 1) open("animated_positions");
     for (const auto& p : mesh->positions) store("positions",p);
     if (mesh->numTimeSteps() != 1) close("animated_positions");
-    store("normals",mesh->normals);
+
+    if (mesh->numTimeSteps() != 1) open("animated_normals");
+    for (const auto& p : mesh->normals) store("normals",p);
+    if (mesh->numTimeSteps() != 1) close("animated_normals");
+
     store("texcoords",mesh->texcoords);
     store("position_indices",mesh->position_indices);
     store("normal_indices",mesh->normal_indices);
@@ -455,26 +477,37 @@ namespace embree
     switch (mesh->type) {
     case RTC_GEOMETRY_TYPE_FLAT_LINEAR_CURVE:
       str_type = "linear";
+      str_subtype = "flat";
       break;
 
     case RTC_GEOMETRY_TYPE_ROUND_BEZIER_CURVE:
       str_type = "bezier";
-      str_subtype = "surface";
+      str_subtype = "round";
       break;
 
     case RTC_GEOMETRY_TYPE_FLAT_BEZIER_CURVE:
       str_type = "bezier";
-      str_subtype = "ribbon";
+      str_subtype = "flat";
+      break;
+
+    case RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_BEZIER_CURVE:
+      str_type = "bezier";
+      str_subtype = "oriented";
       break;
 
     case RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE:
       str_type = "bspline";
-      str_subtype = "surface";
+      str_subtype = "round";
       break;
 
     case RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE:
       str_type = "bspline";
-      str_subtype = "ribbon";
+      str_subtype = "flat";
+      break;
+
+    case RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_BSPLINE_CURVE:
+      str_type = "bspline";
+      str_subtype = "oriented";
       break;
 
     default:
@@ -488,14 +521,19 @@ namespace embree
       hairid[i] = mesh->hairs[i].id;
     }
     
-    open("Curve type=\""+str_subtype+"\" basis=\""+str_type+"\"",id);
+    open("Curves type=\""+str_subtype+"\" basis=\""+str_type+"\"",id);
     store(mesh->material);
     if (mesh->numTimeSteps() != 1) open("animated_positions");
     for (const auto& p : mesh->positions) store4f("positions",p);
     if (mesh->numTimeSteps() != 1) close("animated_positions");
+    if (mesh->normals.size()) {
+      if (mesh->numTimeSteps() != 1) open("animated_normals");
+      for (const auto& p : mesh->normals) store4f("normals",p);
+      if (mesh->numTimeSteps() != 1) close("animated_normals");
+    }
     store("indices",indices);
     store("hairid",hairid);
-    close("Curve");
+    close("Curves");
   }
 
   void XMLWriter::store(Ref<SceneGraph::PerspectiveCameraNode> camera, ssize_t id)
@@ -608,8 +646,8 @@ namespace embree
     else throw std::runtime_error("unknown node type");
   }
  
-  XMLWriter::XMLWriter(Ref<SceneGraph::Node> root, const FileName& fileName, bool embedTextures) 
-    : ident(0), currentNodeID(0), embedTextures(embedTextures)
+  XMLWriter::XMLWriter(Ref<SceneGraph::Node> root, const FileName& fileName, bool embedTextures, bool referenceMaterials) 
+    : ident(0), currentNodeID(0), embedTextures(embedTextures), referenceMaterials(referenceMaterials)
   {
     FileName binFileName = fileName.addExt(".bin");
 
@@ -618,16 +656,15 @@ namespace embree
     bin.exceptions (std::fstream::failbit | std::fstream::badbit);
     bin.open (binFileName, std::fstream::out | std::fstream::binary);
 
-    root->reset();
-    root->calculateInDegree();
-
     xml << "<?xml version=\"1.0\"?>" << std::endl;
+    root->calculateInDegree();
     open("scene");
     store(root);
     close("scene");
+    root->resetInDegree();
   }
 
-  void SceneGraph::storeXML(Ref<SceneGraph::Node> root, const FileName& fileName, bool embedTextures) {
-    XMLWriter(root,fileName,embedTextures);
+  void SceneGraph::storeXML(Ref<SceneGraph::Node> root, const FileName& fileName, bool embedTextures, bool referenceMaterials) {
+    XMLWriter(root,fileName,embedTextures,referenceMaterials);
   }
 }

@@ -15,9 +15,9 @@
 // ======================================================================== //
 
 #include "../common/math/random_sampler.isph"
-#include "../common/math/sampling.isph"
 #include "../common/tutorial/tutorial_device.isph"
 #include "../common/tutorial/scene_device.h"
+#include "../common/math/sampling.isph"
 
 #define ANIM_FPS 15.0f
 #define ENABLE_ANIM 1
@@ -28,7 +28,6 @@
 extern uniform ISPCScene* uniform g_ispc_scene;
 
 /* scene data */
-uniform RTCDevice g_device = NULL;
 uniform RTCScene g_scene   = NULL;
 varying Vec3f* uniform ls_positions = NULL;
 
@@ -245,7 +244,7 @@ void renderTileStandard(uniform int taskIndex,
   Ray rays[TILE_SIZE_X*TILE_SIZE_Y];
 
   /* generate stream of primary rays */
-  uniform int N = 0;
+  uniform unsigned int N = 0;
   foreach_tiled (y = y0 ... y1, x = x0 ... x1)
   {
     /* ISPC workaround for mask == 0 */
@@ -379,13 +378,6 @@ void device_key_pressed_handler(uniform int key)
 /* called by the C++ code for initialization */
 export void device_init (uniform int8* uniform cfg)
 {
-  /* create new Embree device */
-  g_device = rtcNewDevice(cfg);
-  error_handler(NULL,rtcGetDeviceError(g_device));
-
-  /* set error handler */
-  rtcSetDeviceErrorFunction(g_device,error_handler,NULL);
-
   /* create scene */
   g_scene = createScene(g_ispc_scene);
 
@@ -453,7 +445,7 @@ export void device_render (uniform int* uniform pixels,
 #if ENABLE_ANIM == 1
 
   if (animTime < 0.0f) animTime = getTime();
-  const uniform double atime = (getTime() - animTime) * ANIM_FPS;
+  const uniform float atime = (float)((getTime() - animTime) * ANIM_FPS);
   const uniform unsigned int intpart = (unsigned int)floor(atime);
   const uniform double fracpart = atime - (double)intpart;
   const uniform unsigned int keyFrameID = intpart;
@@ -475,5 +467,4 @@ export void device_render (uniform int* uniform pixels,
 export void device_cleanup ()
 {
   rtcReleaseScene (g_scene); g_scene = NULL;
-  rtcReleaseDevice(g_device); g_device = NULL;
 }

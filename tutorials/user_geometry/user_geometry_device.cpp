@@ -21,8 +21,6 @@ namespace embree {
 const int numPhi = 5;
 const int numTheta = 2*numPhi;
 
-RTCDevice g_device = nullptr;
-
 void renderTileStandardStream(int taskIndex,
                               int threadIndex,
                               int* pixels,
@@ -39,7 +37,7 @@ void renderTileStandardStream(int taskIndex,
 
 struct Instance
 {
-  ALIGNED_STRUCT
+  ALIGNED_STRUCT_(16)
   RTCGeometry geometry;
   RTCScene object;
   int userID;
@@ -236,7 +234,7 @@ void instanceOccludedFuncN(const RTCOccludedFunctionNArguments* args)
 
 Instance* createInstance (RTCScene scene, RTCScene object, int userID, const Vec3fa& lower, const Vec3fa& upper)
 {
-  Instance* instance = (Instance*) alignedMalloc(sizeof(Instance));
+  Instance* instance = (Instance*) alignedMalloc(sizeof(Instance),16);
   instance->object = object;
   instance->userID = userID;
   instance->lower = lower;
@@ -278,7 +276,7 @@ void updateInstance (RTCScene scene, Instance* instance)
 
 struct Sphere
 {
-  ALIGNED_STRUCT
+  ALIGNED_STRUCT_(16)
   Vec3fa p;                      //!< position of the sphere
   float r;                      //!< radius of the sphere
   RTCGeometry geometry;
@@ -368,7 +366,7 @@ void sphereIntersectFunc(const RTCIntersectFunctionNArguments* args)
       imask = mask ? -1 : 0;
     }
     
-    const Vec3fa Ng = ray->org+t0*ray->dir-sphere.p;
+    const Vec3fa Ng = ray->org+t1*ray->dir-sphere.p;
     potentialHit.Ng_x = Ng.x;
     potentialHit.Ng_y = Ng.y;
     potentialHit.Ng_z = Ng.z;
@@ -462,7 +460,7 @@ void sphereOccludedFunc(const RTCOccludedFunctionNArguments* args)
       imask = mask ? -1 : 0;
     }
     
-    const Vec3fa Ng = ray->org+t0*ray->dir-sphere.p;
+    const Vec3fa Ng = ray->org+t1*ray->dir-sphere.p;
     potentialHit.Ng_x = Ng.x;
     potentialHit.Ng_y = Ng.y;
     potentialHit.Ng_z = Ng.z;
@@ -768,7 +766,7 @@ void sphereFilterFunctionN(const RTCFilterFunctionNArguments* args)
 Sphere* createAnalyticalSphere (RTCScene scene, const Vec3fa& p, float r)
 {
   RTCGeometry geom = rtcNewGeometry(g_device, RTC_GEOMETRY_TYPE_USER);
-  Sphere* sphere = (Sphere*) alignedMalloc(sizeof(Sphere));
+  Sphere* sphere = (Sphere*) alignedMalloc(sizeof(Sphere),16);
   sphere->p = p;
   sphere->r = r;
   sphere->geometry = geom;
@@ -794,7 +792,7 @@ Sphere* createAnalyticalSphere (RTCScene scene, const Vec3fa& p, float r)
 Sphere* createAnalyticalSpheres (RTCScene scene, unsigned int N)
 {
   RTCGeometry geom = rtcNewGeometry(g_device, RTC_GEOMETRY_TYPE_USER);
-  Sphere* spheres = (Sphere*) alignedMalloc(N*sizeof(Sphere));
+  Sphere* spheres = (Sphere*) alignedMalloc(N*sizeof(Sphere),16);
   unsigned int geomID = rtcAttachGeometry(scene,geom);
   for (unsigned int i=0; i<N; i++) {
     spheres[i].geometry = geom;
@@ -922,13 +920,6 @@ Vec3fa colors[5][4];
 /* called by the C++ code for initialization */
 extern "C" void device_init (char* cfg)
 {
-  /* create new Embree device */
-  g_device = rtcNewDevice(cfg);
-  error_handler(nullptr,rtcGetDeviceError(g_device));
-
-  /* set error handler */
-  rtcSetDeviceErrorFunction(g_device,error_handler,nullptr);
-
   /* create scene */
   g_scene = rtcNewScene(g_device);
 
@@ -1178,7 +1169,7 @@ void renderTileStandardStream(int taskIndex,
       shadow.tnear() = mask ? 0.001f       : (float)(pos_inf);
       shadow.tfar  = mask ? (float)(inf) : (float)(neg_inf);
     }
-    init_Ray(shadow,primary.org + primary.tfar*primary.dir, neg(lightDir), shadow.tnear(), shadow.tfar, 0.0f, N*1 + 0);
+    init_Ray(shadow,primary.org + 0.999f*primary.tfar*primary.dir, neg(lightDir), shadow.tnear(), shadow.tfar, 0.0f, N*1 + 0);
 
     RayStats_addShadowRay(stats);
   }
@@ -1204,7 +1195,7 @@ void renderTileStandardStream(int taskIndex,
     /* calculate shading normal in world space */
     Ray& primary = primary_stream[N];
     Vec3fa Ns = primary.Ng;
-    if (primary.instID != RTC_INVALID_GEOMETRY_ID && primary.instID != 4) {
+    if (primary.instID != RTC_INVALID_GEOMETRY_ID) {
       Ns = xfmVector(g_instance[primary.instID]->normal2world,Vec3fa(Ns));
     }
     Ns = face_forward(primary.dir,normalize(Ns));

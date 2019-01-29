@@ -18,8 +18,6 @@
 
 namespace embree {
 
-RTCDevice g_device = nullptr;
-
 const int numPhi = 20;
 const int numTheta = 2*numPhi;
 const int numSpheres = 64;
@@ -36,7 +34,7 @@ enum LazyState
 /* representation for our lazy geometry */
 struct LazyGeometry
 {
-  ALIGNED_STRUCT
+  ALIGNED_STRUCT_(16)
   RTCGeometry geometry;
   LazyState state;
   RTCScene object;
@@ -180,7 +178,7 @@ void instanceIntersectFuncN(const RTCIntersectFunctionNArguments* args)
     lazyCreate(instance);
   
   /* trace ray inside object */
-  const int geomID = ray->geomID;
+  const unsigned int geomID = ray->geomID;
   ray->geomID = RTC_INVALID_GEOMETRY_ID;
   rtcIntersect1(instance->object,context,RTCRayHit_(*ray));
   if (ray->geomID == RTC_INVALID_GEOMETRY_ID) ray->geomID = geomID;
@@ -210,7 +208,7 @@ void instanceOccludedFuncN(const RTCOccludedFunctionNArguments* args)
 
 LazyGeometry* createLazyObject (RTCScene scene, int userID, const Vec3fa& center, const float radius)
 {
-  LazyGeometry* instance = (LazyGeometry*) alignedMalloc(sizeof(LazyGeometry));
+  LazyGeometry* instance = (LazyGeometry*) alignedMalloc(sizeof(LazyGeometry),16);
   instance->state = LAZY_INVALID;
   instance->object = nullptr;
   instance->userID = userID;
@@ -264,13 +262,6 @@ RTCScene g_scene  = nullptr;
 /* called by the C++ code for initialization */
 extern "C" void device_init (char* cfg)
 {
-  /* create new Embree device */
-  g_device = rtcNewDevice(cfg);
-  error_handler(nullptr,rtcGetDeviceError(g_device));
-
-  /* set error handler */
-  rtcSetDeviceErrorFunction(g_device,error_handler,nullptr);
-
   /* create scene */
   g_scene = rtcNewScene(g_device);
   
@@ -390,7 +381,6 @@ extern "C" void device_cleanup ()
     delete g_objects[i];
   }
   rtcReleaseScene (g_scene); g_scene = nullptr;
-  rtcReleaseDevice(g_device); g_device = nullptr;
 }
 
 } // namespace embree

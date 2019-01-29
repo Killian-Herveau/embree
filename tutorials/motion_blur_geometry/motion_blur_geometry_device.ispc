@@ -17,7 +17,6 @@
 #include "../common/tutorial/tutorial_device.isph"
 
 /* scene data */
-RTCDevice g_device = NULL;
 RTCScene g_scene = NULL;
 uniform Vec3f face_colors[12];
 
@@ -92,6 +91,32 @@ __aligned(16) uniform unsigned int cube_edge_crease_indices[24] =
 uniform unsigned int cube_quad_faces[6] = {
   4, 4, 4, 4, 4, 4
 };
+
+uniform unsigned int addSphere(RTCScene scene, const uniform Vec3f& pos, uniform RTCGeometryType type, uniform unsigned int num_time_steps)
+{
+  RTCGeometry geom = rtcNewGeometry(g_device, type);
+  rtcSetGeometryTimeStepCount(geom, num_time_steps);
+
+  for (uniform unsigned int t = 0; t < num_time_steps; t++)
+  {
+    uniform RTCBufferType bufType = RTC_BUFFER_TYPE_VERTEX;
+    uniform Vec3fa *vertex = (uniform Vec3fa*)rtcSetNewGeometryBuffer(geom, bufType, t, RTC_FORMAT_FLOAT4, sizeof(Vec3fa), 1);
+    uniform AffineSpace3f rotation = make_AffineSpace3f_rotate(make_Vec3f(0,0,0), make_Vec3f(0,1,0), 2.0f*M_PI*(float)t/(float)(num_time_steps-1));
+    *vertex = make_Vec3fa(xfmPoint(rotation, make_Vec3f(1, 0, 0)) + pos);
+    vertex->w = 1.f;
+
+    if (type == RTC_GEOMETRY_TYPE_ORIENTED_DISC_POINT) {
+      uniform Vec3fa *normal = (uniform Vec3fa*)rtcSetNewGeometryBuffer(geom, RTC_BUFFER_TYPE_NORMAL, t, RTC_FORMAT_FLOAT3, sizeof(Vec3fa), 1);
+      normal[0] = make_Vec3fa(1, 1, 0);
+      normal[0] = normalize(normal[0]);
+    }
+  }
+
+  rtcCommitGeometry(geom);
+  uniform unsigned int geomID = rtcAttachGeometry(scene, geom);
+  rtcReleaseGeometry(geom);
+  return geomID;
+}
 
 /* adds a cube to the scene */
 uniform unsigned int addTriangleCube (RTCScene scene, const uniform Vec3f& pos, uniform unsigned int num_time_steps)
@@ -356,7 +381,7 @@ RTCScene addInstancedQuadCube (RTCScene global_scene, const uniform Vec3f& pos, 
 
 struct Sphere
 {
-  ALIGNED_STRUCT
+  ALIGNED_STRUCT_(16)
   Vec3f p;                      //!< position of the sphere
   float r;                      //!< radius of the sphere
   unsigned int geomID;
@@ -502,9 +527,9 @@ uniform unsigned int addGroundPlane (RTCScene scene)
   /* set vertices */
   uniform Vertex* uniform vertices = (uniform Vertex* uniform) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_VERTEX,0,RTC_FORMAT_FLOAT3,sizeof(uniform Vertex),4);
   vertices[0].x = -10; vertices[0].y = -2; vertices[0].z = -10;
-  vertices[1].x = -10; vertices[1].y = -2; vertices[1].z = +10;
+  vertices[1].x = -10; vertices[1].y = -2; vertices[1].z = +15;
   vertices[2].x = +10; vertices[2].y = -2; vertices[2].z = -10;
-  vertices[3].x = +10; vertices[3].y = -2; vertices[3].z = +10;
+  vertices[3].x = +10; vertices[3].y = -2; vertices[3].z = +15;
 
   /* set triangles */
   uniform Triangle* uniform triangles = (uniform Triangle* uniform) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_INDEX,0,RTC_FORMAT_UINT3,sizeof(uniform Triangle),2);
@@ -532,13 +557,6 @@ export void device_init (uniform int8* uniform cfg)
   g_accu_vy = make_Vec3fa(0.0f);
   g_accu_vz = make_Vec3fa(0.0f);
   g_accu_p  = make_Vec3fa(0.0f);
-
-  /* create new Embree device */
-  g_device = rtcNewDevice(cfg);
-  error_handler(NULL,rtcGetDeviceError(g_device));
-
-  /* set error handler */
-  rtcSetDeviceErrorFunction(g_device,error_handler,NULL);
 
   /* create scene */
   g_scene = rtcNewScene(g_device);
@@ -570,6 +588,13 @@ export void device_init (uniform int8* uniform cfg)
 
   sphere0 = addUserGeometrySphere   (g_scene,make_Vec3f(+5,1,+5),1.0f,g_num_time_steps);
   sphere1 = addUserGeometrySphere   (g_scene,make_Vec3f(+5,5,+5),1.0f,g_num_time_steps2);
+
+  addSphere(g_scene, make_Vec3f(-5, 1, +10), RTC_GEOMETRY_TYPE_ORIENTED_DISC_POINT, g_num_time_steps);
+  addSphere(g_scene, make_Vec3f(-5, 5, +10), RTC_GEOMETRY_TYPE_ORIENTED_DISC_POINT, g_num_time_steps2);
+  addSphere(g_scene, make_Vec3f( 0, 1, +10), RTC_GEOMETRY_TYPE_DISC_POINT, g_num_time_steps);
+  addSphere(g_scene, make_Vec3f( 0, 5, +10), RTC_GEOMETRY_TYPE_DISC_POINT, g_num_time_steps2);
+  addSphere(g_scene, make_Vec3f(+5, 1, +10), RTC_GEOMETRY_TYPE_SPHERE_POINT, g_num_time_steps);
+  addSphere(g_scene, make_Vec3f(+5, 5, +10), RTC_GEOMETRY_TYPE_SPHERE_POINT, g_num_time_steps2);
 
   addGroundPlane(g_scene);
 
@@ -729,7 +754,6 @@ export void device_cleanup ()
   rtcReleaseScene(scene2); scene2 = NULL;
   rtcReleaseScene(scene3); scene3 = NULL;
   rtcReleaseScene (g_scene); g_scene = NULL;
-  rtcReleaseDevice(g_device); g_device = NULL;
   delete[] g_accu; g_accu = NULL;
   g_accu_width = 0;
   g_accu_height = 0;

@@ -212,7 +212,7 @@ namespace embree
             GeneralBVHBuilder::Settings settings;
             settings.branchingFactor = N;
             settings.maxDepth = BVH::maxBuildDepthLeaf;
-            settings.logBlockSize = __bsr(N);
+            settings.logBlockSize = bsr(N);
             settings.minLeafSize = 1;
             settings.maxLeafSize = 1;
             settings.travCost = 1.0f;
@@ -308,7 +308,7 @@ namespace embree
 #endif
 
       std::make_heap(refs.begin(),refs.end());
-      while (refs.size()+3 <= extSize)
+      while (refs.size()+N-1 <= extSize)
       {
         std::pop_heap (refs.begin(),refs.end()); 
         NodeRef ref = refs.back().node;
@@ -330,12 +330,6 @@ namespace embree
       }
     }
 
-#if defined(EMBREE_GEOMETRY_CURVE)    
-    Builder* BVH4BuilderTwoLevelLineSegmentsSAH (void* bvh, Scene* scene, const createLineSegmentsAccelTy createMeshAccel) {
-      return new BVHNBuilderTwoLevel<4,LineSegments>((BVH4*)bvh,scene,createMeshAccel);
-    }
-#endif
-
 #if defined(EMBREE_GEOMETRY_TRIANGLE)
     Builder* BVH4BuilderTwoLevelTriangleMeshSAH (void* bvh, Scene* scene, const createTriangleMeshAccelTy createMeshAccel) {
       return new BVHNBuilderTwoLevel<4,TriangleMesh>((BVH4*)bvh,scene,createMeshAccel);
@@ -349,8 +343,8 @@ namespace embree
 #endif
 
 #if defined(EMBREE_GEOMETRY_USER)
-    Builder* BVH4BuilderTwoLevelVirtualSAH (void* bvh, Scene* scene, const createAccelSetAccelTy createMeshAccel) {
-    return new BVHNBuilderTwoLevel<4,AccelSet>((BVH4*)bvh,scene,createMeshAccel);
+    Builder* BVH4BuilderTwoLevelVirtualSAH (void* bvh, Scene* scene, const createUserGeometryAccelTy createMeshAccel) {
+    return new BVHNBuilderTwoLevel<4,UserGeometry>((BVH4*)bvh,scene,createMeshAccel);
     }
 #endif
 
@@ -369,8 +363,8 @@ namespace embree
 #endif
 
 #if defined(EMBREE_GEOMETRY_USER)
-    Builder* BVH8BuilderTwoLevelVirtualSAH (void* bvh, Scene* scene, const createAccelSetAccelTy createMeshAccel) {
-      return new BVHNBuilderTwoLevel<8,AccelSet>((BVH8*)bvh,scene,createMeshAccel);
+    Builder* BVH8BuilderTwoLevelVirtualSAH (void* bvh, Scene* scene, const createUserGeometryAccelTy createMeshAccel) {
+      return new BVHNBuilderTwoLevel<8,UserGeometry>((BVH8*)bvh,scene,createMeshAccel);
     }
 #endif
 #endif

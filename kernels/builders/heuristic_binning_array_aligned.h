@@ -156,6 +156,20 @@ namespace embree
           new (&rinfo) PrimInfoRange(center,end,right);
         }
 
+        void splitByGeometry(const range<size_t>& range, PrimInfoRange& linfo, PrimInfoRange& rinfo)
+        {
+          assert(range.size() > 1);
+          CentGeomBBox3fa left(empty);
+          CentGeomBBox3fa right(empty);
+          unsigned int geomID = prims[range.begin()].geomID();
+          size_t center = serial_partitioning(prims,range.begin(),range.end(),left,right,
+                                              [&] ( const PrimRef& prim ) { return prim.geomID() == geomID; },
+                                              [ ] ( CentGeomBBox3fa& a, const PrimRef& ref ) { a.extend_center2(ref); });
+
+          new (&linfo) PrimInfoRange(range.begin(),center,left);
+          new (&rinfo) PrimInfoRange(center,range.end(),right);
+        }
+
       private:
         PrimRef* const prims;
       };
@@ -176,7 +190,7 @@ namespace embree
         {
           ObjectBinner binner(empty);
           const BinMapping<BINS> mapping(set.size(),set.centBounds);
-          bin_parallel(binner,set.prims->data(),set.object_range.begin(),set.object_range.end(),PARALLEL_FIND_BLOCK_SIZE,PARALLEL_THRESHOLD,mapping);
+          bin_parallel(binner,set.prims->data(),set.begin(),set.end(),PARALLEL_FIND_BLOCK_SIZE,PARALLEL_THRESHOLD,mapping);
           Split osplit = binner.best(mapping,logBlockSize);
           osplit.sah *= set.time_range.size();
           if (!osplit.valid()) osplit.data = Split::SPLIT_FALLBACK; // use fallback split
@@ -186,8 +200,8 @@ namespace embree
         /*! array partitioning */
         __forceinline void split(const Split& split, const SetMB& set, SetMB& lset, SetMB& rset)
         {
-          const size_t begin = set.object_range.begin();
-          const size_t end   = set.object_range.end();
+          const size_t begin = set.begin();
+          const size_t end   = set.end();
           PrimInfoMB left = empty;
           PrimInfoMB right = empty;
           const vint4 vSplitPos(split.pos);

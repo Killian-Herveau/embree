@@ -26,6 +26,9 @@ namespace embree
     enum Features { FEATURE_RTCORE = 1, FEATURE_STREAM = 2 };
 
     Application (int features);
+    virtual ~Application();
+
+    static Application* instance;
     
     /* virtual interface for command line option processing */
     struct CommandLineOption : public RefCount 
@@ -74,6 +77,9 @@ namespace embree
     /* prints help for all supported command line options */
     void printCommandLineHelp();
 
+    /* print log message */
+    void log(int verbose, const std::string& str);
+    
     /* command line options database */
   public:
     std::vector<         Ref<CommandLineOption> > commandLineOptionList;
@@ -85,7 +91,14 @@ namespace embree
     virtual int main(int argc, char** argv) = 0;
 
   public:
-    /* embree configuration */
-    std::string rtcore;
+    std::string rtcore;      // embree configuration
+    int verbosity;           // verbosity of output
+
+  public:
+    bool log_delta;       // whether to print delta stats
+    double start_time;       // start time of application
+    double last_time;        // last log time of application
+    ssize_t last_virtual_memory; // last virtual memory usage
+    ssize_t last_resident_memory; // last resident memory usage
   };
 }

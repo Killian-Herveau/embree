@@ -18,9 +18,21 @@
 
 namespace embree
 {
+  Application* Application::instance = nullptr;
+  
   Application::Application(int features)
-    : rtcore("start_threads=1,set_affinity=1")
+    : rtcore("start_threads=1,set_affinity=1"), verbosity(0),
+      log_delta(false),
+      start_time(getSeconds()),
+      last_time(start_time),
+      last_virtual_memory(0),
+      last_resident_memory(0)
   {
+    if (instance)
+      throw std::runtime_error("internal error: applicaton already created");
+
+    instance = this;
+
     registerOption("help", [this] (Ref<ParseStream> cin, const FileName& path) {
         printCommandLineHelp();
         exit(1);
@@ -51,8 +63,13 @@ namespace embree
       registerOptionAlias("start_threads","start-threads");
       
       registerOption("verbose", [this] (Ref<ParseStream> cin, const FileName& path) {
-          rtcore += ",verbose=" + toString(cin->getInt());
+          verbosity = cin->getInt();
+          rtcore += ",verbose=" + toString(verbosity);
         }, "--verbose <int>: sets verbosity level");
+
+      registerOption("delta", [this] (Ref<ParseStream> cin, const FileName& path) {
+          log_delta = true;
+        }, "--delta: print delta numbers in log");
       
       registerOption("isa", [this] (Ref<ParseStream> cin, const FileName& path) {
           rtcore += ",isa=" + cin->getString();
@@ -69,6 +86,12 @@ namespace embree
         "  avx512knl: select AVX512 codepath for KNL\n"
         "  avx512skx: select AVX512 codepath for SKX\n");
     } 
+  }
+
+  Application::~Application()
+  {
+    assert(instance == this);
+    instance = nullptr;
   }
   
   void Application::registerOptionAlias(const std::string& name, const std::string& alternativeName) {
@@ -118,5 +141,30 @@ namespace embree
     for (auto& c : commandLineOptionList) {
       std::cout << c->description << std::endl;
     }
+  }
+
+  void Application::log(int verbose, const std::string& str)
+  {
+    if (verbosity < verbose)
+      return;
+    
+    double time = getSeconds();
+    ssize_t virtual_memory = getVirtualMemoryBytes();
+    ssize_t resident_memory = getResidentMemoryBytes();
+
+    double log_time = log_delta ? time-last_time : time-start_time;
+    ssize_t log_virtual_memory = log_delta ? virtual_memory-last_virtual_memory : virtual_memory;
+    ssize_t log_resident_memory = log_delta ? resident_memory-last_resident_memory : resident_memory;
+      
+    std::cout << "[ "
+              << std::setw(8) << std::setprecision(3) << std::fixed << log_time << "s, "
+              << std::setw(8) << std::setprecision(2) << std::fixed << double(log_virtual_memory)/1E6 << " MB virtual, "
+              << std::setw(8) << std::setprecision(2) << std::fixed << double(log_resident_memory)/1E6 << " MB resident ] "
+              << str << std::fixed 
+              << std::endl << std::flush;
+    
+    last_time = time;
+    last_virtual_memory = virtual_memory;
+    last_resident_memory = resident_memory;
   }
 }

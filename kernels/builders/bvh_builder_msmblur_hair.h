@@ -56,7 +56,7 @@ namespace embree
           : depth(depth), prims(prims) {}
 
         __forceinline size_t size() const {
-          return prims.object_range.size();
+          return prims.size();
         }
 
       public:
@@ -76,7 +76,7 @@ namespace embree
 
         class BuilderT
         {
-          ALIGNED_CLASS;
+          ALIGNED_CLASS_(16);
 
           static const size_t MAX_BRANCHING_FACTOR =  8;         //!< maximum supported BVH branching factor
           static const size_t MIN_LARGE_LEAF_LEVELS = 8;         //!< create balanced tree if we are that many levels before the maximum tree depth
@@ -118,13 +118,26 @@ namespace embree
 
         private:
 
+          /*! checks if all primitives are from the same geometry */
+          __forceinline bool sameGeometry(const SetMB& set)
+          {
+            mvector<PrimRefMB>& prims = *set.prims;
+            unsigned int firstGeomID = prims[set.begin()].geomID();
+            for (size_t i=set.begin()+1; i<set.end(); i++) {
+              if (prims[i].geomID() != firstGeomID){
+                return false;
+              }
+            }
+            return true;
+          }
+          
           /*! performs some split if SAH approaches fail */
           void splitFallback(const SetMB& set, SetMB& lset, SetMB& rset)
           {
             mvector<PrimRefMB>& prims = *set.prims;
 
-            const size_t begin = set.object_range.begin();
-            const size_t end   = set.object_range.end();
+            const size_t begin = set.begin();
+            const size_t end   = set.end();
             const size_t center = (begin + end)/2;
 
             PrimInfoMB linfo = empty;
@@ -139,6 +152,22 @@ namespace embree
             new (&rset) SetMB(rinfo,set.prims,range<size_t>(center,end  ),set.time_range);
           }
 
+          void splitByGeometry(const SetMB& set, SetMB& lset, SetMB& rset)
+          {
+            assert(set.size() > 1);
+            const size_t begin = set.begin();
+            const size_t end   = set.end();
+            PrimInfoMB linfo(empty);
+            PrimInfoMB rinfo(empty);
+            unsigned int geomID = (*set.prims)[begin].geomID();
+            size_t center = serial_partitioning(set.prims->data(),begin,end,linfo,rinfo,
+                                                [&] ( const PrimRefMB& prim ) { return prim.geomID() == geomID; },
+                                                [ ] ( PrimInfoMB& a, const PrimRefMB& ref ) { a.add_primref(ref); });
+
+            new (&lset) SetMB(linfo,set.prims,range<size_t>(begin,center),set.time_range);
+            new (&rset) SetMB(rinfo,set.prims,range<size_t>(center,end  ),set.time_range);
+          }
+
           /*! creates a large leaf that could be larger than supported by the BVH */
           NodeRecordMB4D createLargeLeaf(BuildRecord& current, Allocator alloc)
           {
@@ -146,8 +175,22 @@ namespace embree
             if (current.depth > cfg.maxDepth)
               throw_RTCError(RTC_ERROR_UNKNOWN,"depth limit reached");
 
+            /* special case when directly creating leaf without any splits that could shrink time_range */
+            bool force_split = false;
+            if (current.depth == 1 && current.size() > 0)
+            {
+              BBox1f c = empty;
+              BBox1f p = current.prims.time_range;
+              for (size_t i=current.prims.begin(); i<current.prims.end(); i++) {
+                mvector<PrimRefMB>& prims = *current.prims.prims;
+                c.extend(prims[i].time_range);
+              }
+              
+              force_split = c.lower > p.lower || c.upper < p.upper;
+            }
+
             /* create leaf for few primitives */
-            if (current.size() <= cfg.maxLeafSize)
+            if (current.size() <= cfg.maxLeafSize && sameGeometry(current.prims) && !force_split)
               return createLeaf(current.prims,alloc);
 
             /* fill all children by always splitting the largest one */
@@ -161,8 +204,10 @@ namespace embree
               for (unsigned i=0; i<children.size(); i++)
               {
                 /* ignore leaves as they cannot get split */
-                if (children[i].size() <= cfg.maxLeafSize)
+                if (children[i].size() <= cfg.maxLeafSize && sameGeometry(children[i].prims) && !force_split)
                   continue;
+
+                force_split = false;
 
                 /* remember child with largest size */
                 if (children[i].size() > bestSize) {
@@ -175,13 +220,26 @@ namespace embree
               /*! split best child into left and right child */
               BuildRecord left(current.depth+1);
               BuildRecord right(current.depth+1);
-              splitFallback(children[bestChild].prims,left.prims,right.prims);
+              if (!sameGeometry(children[bestChild].prims)) {
+                splitByGeometry(children[bestChild].prims,left.prims,right.prims);
+              } else {
+                splitFallback(children[bestChild].prims,left.prims,right.prims);
+              }
               children.split(bestChild,left,right,std::unique_ptr<mvector<PrimRefMB>>());
 
             } while (children.size() < cfg.branchingFactor);
 
+
+            /* detect time_ranges that have shrunken */
+            bool timesplit = false;
+            for (size_t i=0; i<children.size(); i++) {
+              const BBox1f c = children[i].prims.time_range;
+              const BBox1f p = current.prims.time_range;
+              timesplit |= c.lower > p.lower || c.upper < p.upper;
+            }
+            
             /* create node */
-            NodeRef node = createAlignedNodeMB(alloc,false);
+            NodeRef node = createAlignedNodeMB(alloc,timesplit);
 
             LBBox3fa bounds = empty;
             for (size_t i=0; i<children.size(); i++) {
@@ -190,6 +248,9 @@ namespace embree
               bounds.extend(child.lbounds);
             }
 
+            if (timesplit)
+              bounds = current.prims.linearBounds(recalculatePrimRef);
+              
             return NodeRecordMB4D(node,bounds,current.prims.time_range);
           }
 
@@ -198,10 +259,10 @@ namespace embree
           {
             /* variable to track the SAH of the best splitting approach */
             float bestSAH = inf;
-            const float leafSAH = current.prims.leafSAH();
+            const float leafSAH = current.prims.leafSAH(cfg.logBlockSize);
 
             /* perform standard binning in aligned space */
-            HeuristicBinning::Split alignedObjectSplit = alignedHeuristic.find(current.prims,0);
+            HeuristicBinning::Split alignedObjectSplit = alignedHeuristic.find(current.prims,cfg.logBlockSize);
             float alignedObjectSAH = alignedObjectSplit.splitSAH();
             bestSAH = min(alignedObjectSAH,bestSAH);
 
@@ -212,7 +273,7 @@ namespace embree
             if (alignedObjectSAH > 0.7f*leafSAH) {
               uspace = unalignedHeuristic.computeAlignedSpaceMB(scene,current.prims);
               const SetMB sset = current.prims.primInfo(recalculatePrimRef,uspace);
-              unalignedObjectSplit = unalignedHeuristic.find(sset,0,uspace);
+              unalignedObjectSplit = unalignedHeuristic.find(sset,cfg.logBlockSize,uspace);
               unalignedObjectSAH = 1.3f*unalignedObjectSplit.splitSAH(); // makes unaligned splits more expensive
               bestSAH = min(unalignedObjectSAH,bestSAH);
             }
@@ -222,7 +283,7 @@ namespace embree
             typename HeuristicTemporal::Split temporal_split;
             if (bestSAH > 0.5f*leafSAH) {
               if (current.prims.time_range.size() > 1.01f/float(current.prims.max_num_time_segments)) {
-                temporal_split = temporalSplitHeuristic.find(current.prims, size_t(0));
+                temporal_split = temporalSplitHeuristic.find(current.prims,cfg.logBlockSize);
                 temporal_split_sah = temporal_split.splitSAH();
                 bestSAH = min(temporal_split_sah,bestSAH);
               }
@@ -302,6 +363,13 @@ namespace embree
               children.split(bestChild,left,right,std::move(new_vector));
 
             } while (children.size() < cfg.branchingFactor);
+
+            /* detect time_ranges that have shrunken */
+            for (size_t i=0; i<children.size(); i++) {
+              const BBox1f c = children[i].prims.time_range;
+              const BBox1f p = current.prims.time_range;
+              timesplit |= c.lower > p.lower || c.upper < p.upper;
+            }
 
             /* create time split node */
             if (timesplit)

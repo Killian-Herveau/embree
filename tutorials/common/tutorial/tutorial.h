@@ -22,6 +22,13 @@
 #include "scene.h"
 #include "scene_device.h"
 
+/* include GLFW for window management */
+#include <GLFW/glfw3.h>
+
+/* include ImGUI */
+#include "../imgui/imgui.h"
+#include "../imgui/imgui_impl_glfw_gl2.h"
+
 namespace embree
 {
   /* functions provided by each tutorial */
@@ -100,16 +107,20 @@ namespace embree
     /* set scene to use */
     void set_scene (TutorialScene* in);
 
-    /* GLUT callback functions */
+    /* create a fullscreen window */
+    GLFWwindow* createFullScreenWindow();
+
+    /* create a standard window of specified size */
+    GLFWwindow* createStandardWindow(int width, int height);
+ 
+    /* GLFW callback functions */
   public:
-    virtual void keyboardFunc(unsigned char key, int x, int y);
-    virtual void keyboardUpFunc(unsigned char key, int x, int y);
-    virtual void specialFunc(int key, int, int);
-    virtual void clickFunc(int button, int state, int x, int y);
-    virtual void motionFunc(int x, int y);
+    virtual void keyboardFunc(GLFWwindow* window, int key, int scancode, int action, int mods);
+    virtual void clickFunc(GLFWwindow* window, int button, int action, int mods);
+    virtual void motionFunc(GLFWwindow* window, double x, double y);
     virtual void displayFunc();
-    virtual void reshapeFunc(int width, int height);
-    virtual void idleFunc();
+    virtual void reshapeFunc(GLFWwindow* window, int width, int height);
+    virtual void drawGUI() {}; 
 
   public:
     std::string tutorialName;
@@ -136,14 +147,14 @@ namespace embree
 
     unsigned window_width;
     unsigned window_height;
-    int windowID;
+    GLFWwindow* window;
 
     double time0;
     int debug_int0;
     int debug_int1;
 
     int mouseMode;
-    int clickX, clickY;
+    double clickX, clickY;
 
     float speed;
     Vec3f moveDelta;
@@ -184,12 +195,25 @@ namespace embree
   public:
     TutorialScene obj_scene;
     Ref<SceneGraph::GroupNode> scene;
-    bool convert_tris_to_quads;
+
+    enum SceneGraphOperations
+    {
+      CONVERT_TRIANGLES_TO_QUADS,
+      CONVERT_BEZIER_TO_LINES,
+      CONVERT_BEZIER_TO_BSPLINE,
+      CONVERT_BEZIER_TO_HERMITE,
+      CONVERT_BSPLINE_TO_BEZIER,
+      CONVERT_FLAT_TO_ROUND_CURVES,
+      CONVERT_ROUND_TO_FLAT_CURVES,
+      MERGE_QUADS_TO_GRIDS,
+      CONVERT_QUADS_TO_GRIDS,
+      CONVERT_GRIDS_TO_QUADS,
+      CONVERT_MBLUR_TO_NONMBLUR,
+    };
+    std::vector<SceneGraphOperations> sgop;
+
     float convert_tris_to_quads_prop;
-    bool convert_bezier_to_lines;
-    bool convert_hair_to_curves;
-    bool convert_bezier_to_bspline;
-    bool convert_bspline_to_bezier;
+    unsigned grid_resX, grid_resY;
     bool remove_mblur;
     bool remove_non_mblur;
     FileName sceneFilename;

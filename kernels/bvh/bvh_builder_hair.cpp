@@ -15,19 +15,20 @@
 // ======================================================================== //
 
 #include "../builders/bvh_builder_hair.h"
-#include "../builders/bvh_builder_msmblur_hair.h"
 #include "../builders/primrefgen.h"
 
-#include "../geometry/bezier1v.h"
-#include "../geometry/bezier1i.h"
+#include "../geometry/pointi.h"
+#include "../geometry/linei.h"
+#include "../geometry/curveNi.h"
+#include "../geometry/curveNv.h"
 
-#if defined(EMBREE_GEOMETRY_CURVE)
+#if defined(EMBREE_GEOMETRY_CURVE) || defined(EMBREE_GEOMETRY_POINT)
 
 namespace embree
 {
   namespace isa
   {
-    template<int N, typename Primitive>
+    template<int N, typename CurvePrimitive, typename LinePrimitive, typename PointPrimitive>
     struct BVHNHairBuilderSAH : public Builder
     {
       typedef BVHN<N> BVH;
@@ -46,12 +47,12 @@ namespace embree
         /* if we use the primrefarray for allocations we have to take it back from the BVH */
         if (settings.finished_range_threshold != size_t(inf))
           bvh->alloc.unshare(prims);
-      
+
         /* fast path for empty BVH */
-        const size_t numPrimitives = scene->getNumPrimitives<NativeCurves,false>();
+        const size_t numPrimitives = scene->getNumPrimitives<CurveGeometry,false>();
         if (numPrimitives == 0) {
+          bvh->clear();
           prims.clear();
-          bvh->set(BVH::emptyNode,empty,0);
           return;
         }
 
@@ -59,35 +60,38 @@ namespace embree
 
         /* create primref array */
         prims.resize(numPrimitives);
-        const PrimInfo pinfo = createPrimRefArray<NativeCurves,false>(scene,prims,scene->progressInterface);
+        const PrimInfo pinfo = createPrimRefArray(scene,Geometry::MTY_CURVES,false,prims,scene->progressInterface);
 
         /* estimate acceleration structure size */
         const size_t node_bytes = pinfo.size()*sizeof(typename BVH::UnalignedNode)/(4*N);
-        const size_t leaf_bytes = pinfo.size()*sizeof(Primitive);
+        const size_t leaf_bytes = CurvePrimitive::bytes(pinfo.size());
         bvh->alloc.init_estimate(node_bytes+leaf_bytes);
         
         /* builder settings */
         settings.branchingFactor = N;
         settings.maxDepth = BVH::maxBuildDepthLeaf;
-        settings.logBlockSize = 0;
-        settings.minLeafSize = 1;
-        settings.maxLeafSize = BVH::maxLeafBlocks;
+        settings.logBlockSize = bsf(CurvePrimitive::max_size());
+        settings.minLeafSize = CurvePrimitive::max_size();
+        settings.maxLeafSize = CurvePrimitive::max_size();
         settings.finished_range_threshold = numPrimitives/1000;
         if (settings.finished_range_threshold < 1000)
           settings.finished_range_threshold = inf;
 
         /* creates a leaf node */
-        auto createLeaf = [&] (const PrimRef* prims, const range<size_t>& set, const FastAllocator::CachedAllocator& alloc) -> NodeRef
-          {
-            size_t start = set.begin();
-            size_t items = set.size();
-            Primitive* accel = (Primitive*) alloc.malloc1(items*sizeof(Primitive),BVH::byteAlignment);
-            for (size_t i=0; i<items; i++) {
-              accel[i].fill(prims,start,set.end(),bvh->scene);
-            }
-            return bvh->encodeLeaf((char*)accel,items);
-          };
+        auto createLeaf = [&] (const PrimRef* prims, const range<size_t>& set, const FastAllocator::CachedAllocator& alloc) -> NodeRef {
+          
+          if (set.size() == 0)
+            return BVH::emptyNode;
 
+          const unsigned int geomID0 = prims[set.begin()].geomID();
+          if (scene->get(geomID0)->getTypeMask() & Geometry::MTY_POINTS)
+            return PointPrimitive::createLeaf(bvh,prims,set,alloc);
+          else if (scene->get(geomID0)->getCurveBasis() == Geometry::GTY_BASIS_LINEAR)
+            return LinePrimitive::createLeaf(bvh,prims,set,alloc);
+          else
+            return CurvePrimitive::createLeaf(bvh,prims,set,alloc);
+        };
+        
         auto reportFinishedRange = [&] (const range<size_t>& range) -> void
           {
             PrimRef* begin = prims.data()+range.begin();
@@ -108,6 +112,7 @@ namespace embree
            scene,prims.data(),pinfo,settings);
         
         bvh->set(root,LBBox3fa(pinfo.geomBounds),pinfo.size());
+        
         /* if we allocated using the primrefarray we have to keep it alive */
         if (settings.finished_range_threshold != size_t(inf))
           bvh->alloc.share(prims);
@@ -127,12 +132,12 @@ namespace embree
     };
     
     /*! entry functions for the builder */
-    Builder* BVH4Bezier1vBuilder_OBB_New   (void* bvh, Scene* scene, size_t mode) { return new BVHNHairBuilderSAH<4,Bezier1v>((BVH4*)bvh,scene); }
-    Builder* BVH4Bezier1iBuilder_OBB_New   (void* bvh, Scene* scene, size_t mode) { return new BVHNHairBuilderSAH<4,Bezier1i>((BVH4*)bvh,scene); }
+    Builder* BVH4Curve4vBuilder_OBB_New   (void* bvh, Scene* scene, size_t mode) { return new BVHNHairBuilderSAH<4,Curve4v,Line4i,Point4i>((BVH4*)bvh,scene); }
+    Builder* BVH4Curve4iBuilder_OBB_New   (void* bvh, Scene* scene, size_t mode) { return new BVHNHairBuilderSAH<4,Curve4i,Line4i,Point4i>((BVH4*)bvh,scene); }
 
 #if defined(__AVX__)
-    Builder* BVH8Bezier1vBuilder_OBB_New   (void* bvh, Scene* scene, size_t mode) { return new BVHNHairBuilderSAH<8,Bezier1v>((BVH8*)bvh,scene); }
-    Builder* BVH8Bezier1iBuilder_OBB_New   (void* bvh, Scene* scene, size_t mode) { return new BVHNHairBuilderSAH<8,Bezier1i>((BVH8*)bvh,scene); }
+    Builder* BVH8Curve8vBuilder_OBB_New   (void* bvh, Scene* scene, size_t mode) { return new BVHNHairBuilderSAH<8,Curve8v,Line8i,Point8i>((BVH8*)bvh,scene); }
+    Builder* BVH4Curve8iBuilder_OBB_New   (void* bvh, Scene* scene, size_t mode) { return new BVHNHairBuilderSAH<4,Curve8i,Line8i,Point8i>((BVH4*)bvh,scene); }
 #endif
 
   }

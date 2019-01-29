@@ -23,12 +23,7 @@ namespace embree
   TutorialScene::TutorialScene() {
   }
 
-  TutorialScene::~TutorialScene()
-  {
-    /* delete all instanced sub-scenes */
-    for (RTCScene s : geomID_to_scene) {
-      if (s) rtcReleaseScene(s);
-    }
+  TutorialScene::~TutorialScene() {
   }
   
   void TutorialScene::add(Ref<SceneGraph::GroupNode> group) 
@@ -39,13 +34,6 @@ namespace embree
         lights.push_back(lightNode->light);
       } 
       else if (Ref<SceneGraph::TransformNode> xfmNode = node.dynamicCast<SceneGraph::TransformNode>()) {
-        if (g_instancing_mode == SceneGraph::INSTANCING_GEOMETRY_GROUP) {
-          if (Ref<SceneGraph::GroupNode> groupNode = xfmNode->child.dynamicCast<SceneGraph::GroupNode>()) {
-            for (size_t i=0; i<groupNode->size(); i++) {
-              addGeometry(groupNode->child(i));
-            }
-          }
-        }
         addGeometry(xfmNode->child);
         addGeometry(node);
       }
@@ -55,33 +43,31 @@ namespace embree
       else {
         addGeometry(node);
       }
-      geomID_to_scene.resize(geometries.size(),nullptr);
-      geomID_to_inst.resize(geometries.size());
     }
   }
   
   unsigned TutorialScene::addGeometry(Ref<SceneGraph::Node> node) 
   {
-    if (geometry2id.find(node) == geometry2id.end()) {
+    if (node->id == -1) {
       geometries.push_back(node);
-      geometry2id[node] = unsigned(geometries.size()-1);
+      node->id = unsigned(geometries.size()-1);
     }
-    return geometry2id[node];
+    return node->id;
   }
   
   unsigned TutorialScene::materialID(Ref<SceneGraph::MaterialNode> material) 
   {
-    if (material2id.find(material) == material2id.end()) {
+    if (material->id == -1) {
       materials.push_back(material);
-      material2id[material] = unsigned(materials.size()-1);
+      material->id = unsigned(materials.size()-1);
     }
-    return material2id[material];
+    return material->id;
   }
   
   unsigned TutorialScene::geometryID(Ref<SceneGraph::Node> geometry) 
   {
-    assert(geometry2id.find(geometry) != geometry2id.end());
-    return geometry2id[geometry];
+    assert(geometry->id != -1);
+    return geometry->id;
   }
   
   void TutorialScene::print_camera_names ()

@@ -128,14 +128,14 @@ namespace embree
     if (builderName == "") 
       return inf;
 
-    if (device->verbosity(1))
+    if (device->verbosity(2))
     {
       Lock<MutexSys> lock(g_printMutex);
-      std::cout << "building BVH" << N << (builderName.find("MBlur") != std::string::npos ? "MB" : "") << "<" << primTy->name << "> using " << builderName << " ..." << std::endl << std::flush;
+      std::cout << "building BVH" << N << (builderName.find("MBlur") != std::string::npos ? "MB" : "") << "<" << primTy->name() << "> using " << builderName << " ..." << std::endl << std::flush;
     }
 
     double t0 = 0.0;
-    if (device->benchmark || device->verbosity(1)) t0 = getSeconds();
+    if (device->benchmark || device->verbosity(2)) t0 = getSeconds();
     return t0;
   }
 
@@ -146,18 +146,18 @@ namespace embree
       return;
     
     double dt = 0.0;
-    if (device->benchmark || device->verbosity(1)) 
+    if (device->benchmark || device->verbosity(2)) 
       dt = getSeconds()-t0;
 
     std::unique_ptr<BVHNStatistics<N>> stat;
 
     /* print statistics */
-    if (device->verbosity(1))
+    if (device->verbosity(2))
     {
       if (!stat) stat.reset(new BVHNStatistics<N>(this));
       const size_t usedBytes = alloc.getUsedBytes();
       Lock<MutexSys> lock(g_printMutex);
-      std::cout << "finished BVH" << N << "<" << primTy->name << "> : " << 1000.0f*dt << "ms, " << 1E-6*double(numPrimitives)/dt << " Mprim/s, " << 1E-9*double(usedBytes)/dt << " GB/s" << std::endl;
+      std::cout << "finished BVH" << N << "<" << primTy->name() << "> : " << 1000.0f*dt << "ms, " << 1E-6*double(numPrimitives)/dt << " Mprim/s, " << 1E-9*double(usedBytes)/dt << " GB/s" << std::endl;
     
       if (device->verbosity(2))
         std::cout << stat->str();
@@ -188,7 +188,7 @@ namespace embree
     {
       if (!stat) stat.reset(new BVHNStatistics<N>(this));
       Lock<MutexSys> lock(g_printMutex);
-      std::cout << "BENCHMARK_BUILD " << dt << " " << double(numPrimitives)/dt << " " << stat->sah() << " " << stat->bytesUsed() << " BVH" << N << "<" << primTy->name << ">" << std::endl << std::flush;
+      std::cout << "BENCHMARK_BUILD " << dt << " " << double(numPrimitives)/dt << " " << stat->sah() << " " << stat->bytesUsed() << " BVH" << N << "<" << primTy->name() << ">" << std::endl << std::flush;
     }
   }
 

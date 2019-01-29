@@ -41,7 +41,7 @@ namespace embree
   {
     vbool valid1 = valid0;
     while (any(valid1)) {
-      const int j = int(__bsf(movemask(valid1)));
+      const int j = int(bsf(movemask(valid1)));
       const int i = vi[j];
       const vbool valid2 = valid1 & (i == vi);
       valid1 = andn(valid1, valid2);
@@ -54,7 +54,7 @@ namespace embree
   __forceinline int next_unique(vbool& valid, const vint& vi, /*out*/ vbool& valid_i)
   {
     assert(any(valid));
-    const int j = int(__bsf(movemask(valid)));
+    const int j = int(bsf(movemask(valid)));
     const int i = vi[j];
     valid_i = valid & (i == vi);
     valid = andn(valid, valid_i);
@@ -67,7 +67,7 @@ namespace embree
   {
     vbool valid1 = valid0;
     while (any(valid1)) {
-      const int j = (int) __bsf(movemask(valid1));
+      const int j = int(bsf(movemask(valid1)));
       const int i = vi[j];
       const vbool valid2 = valid1 & (i == vi);
       valid1 = andn(valid1, valid2);
@@ -80,7 +80,7 @@ namespace embree
   __forceinline int next_unique_index(vbool& valid, const vint& vi, /*out*/ vbool& valid_i)
   {
     assert(any(valid));
-    const int j = int(__bsf(movemask(valid)));
+    const int j = int(bsf(movemask(valid)));
     const int i = vi[j];
     valid_i = valid & (i == vi);
     valid = andn(valid, valid_i);

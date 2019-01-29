@@ -20,6 +20,8 @@
 #include "node_intersector1.h"
 #include "../common/stack_item.h"
 
+#define NEW_SORTING_CODE 1
+
 namespace embree
 {
   namespace isa
@@ -29,10 +31,10 @@ namespace embree
     class BVHNNodeTraverser1Hit;
 
     /*! Helper functions for fast sorting using AVX512 instructions. */
-#if defined(__AVX512F__)   
+#if defined(__AVX512F__) && !defined(__AVX512VL__) // KNL
 
     /* KNL code path */
-    __forceinline static void isort_update(vfloat16 &dist, vllong8 &ptr, const vfloat16 &d, const vllong8 &p)
+    __forceinline void isort_update(vfloat16 &dist, vllong8 &ptr, const vfloat16 &d, const vllong8 &p)
     {
       const vfloat16 dist_shift = align_shift_right<15>(dist,dist);
       const vllong8  ptr_shift  = align_shift_right<7>(ptr,ptr);
@@ -44,7 +46,7 @@ namespace embree
       ptr  = select(vboold8(m_geq_shift),ptr_shift,ptr);
     }
 
-    __forceinline static void isort_quick_update(vfloat16 &dist, vllong8 &ptr, const vfloat16 &d, const vllong8 &p)
+    __forceinline void isort_quick_update(vfloat16 &dist, vllong8 &ptr, const vfloat16 &d, const vllong8 &p)
     {
       //dist = align_shift_right<15>(dist,d);
       //ptr  = align_shift_right<7>(ptr,p);
@@ -53,11 +55,11 @@ namespace embree
     }
 
     template<int N, int Nx, int types, class NodeRef, class BaseNode>
-    static __forceinline void traverseClosestHitAVX512(NodeRef& cur,
-                                                       size_t mask,
-                                                       const vfloat<Nx>& tNear,
-                                                       StackItemT<NodeRef>*& stackPtr,
-                                                       StackItemT<NodeRef>* stackEnd)
+    __forceinline void traverseClosestHitAVX512(NodeRef& cur,
+                                                size_t mask,
+                                                const vfloat<Nx>& tNear,
+                                                StackItemT<NodeRef>*& stackPtr,
+                                                StackItemT<NodeRef>* stackEnd)
     {
       assert(mask != 0);
       const BaseNode* node = cur.baseNode(types);
@@ -179,7 +181,7 @@ namespace embree
 
       /* >=5 hits: reverse to descending order for writing to stack */
 
-      const size_t hits = 4 + __popcnt(mask);
+      const size_t hits = 4 + popcnt(mask);
       const vfloat16 dist_A2  = select(m_dist3, dist_A1, d3);
       vfloat16 dist(neg_inf);
       vllong8 ptr(zero);
@@ -231,13 +233,12 @@ namespace embree
       /* increase stack pointer */
       stackPtr += hits-1;
     }
+#endif
 
-
-    /* SKX code path */
-#if defined(__AVX512VL__)
+#if defined(__AVX512F__) && defined(__AVX512VL__) // SKX
 
     template<int N>
-    __forceinline static void isort_update(vfloat<N> &dist, vint<N> &ptr, const vfloat<N> &d, const vint<N> &p)
+    __forceinline void isort_update(vfloat<N> &dist, vint<N> &ptr, const vfloat<N> &d, const vint<N> &p)
     {
       const vfloat<N> dist_shift = align_shift_right<N-1>(dist,dist);
       const vint<N>  ptr_shift  = align_shift_right<N-1>(ptr,ptr);
@@ -250,12 +251,51 @@ namespace embree
     }
 
     template<int N>
-    __forceinline static void isort_quick_update(vfloat<N> &dist, vint<N> &ptr, const vfloat<N> &d, const vint<N> &p)
+    __forceinline void isort_update(vint<N> &dist, const vint<N> &d)
+    {
+      const vint<N> dist_shift = align_shift_right<N-1>(dist,dist);
+      const vboolf<N> m_geq = d >= dist;
+      const vboolf<N> m_geq_shift = m_geq << 1;
+      dist = select(m_geq,d,dist);
+      dist = select(m_geq_shift,dist_shift,dist);
+    }
+
+    template<int N>
+    __forceinline void isort_quick_update(vfloat<N> &dist, vint<N> &ptr, const vfloat<N> &d, const vint<N> &p)
     {
       dist = align_shift_right<N-1>(dist,permute(d,vint<N>(zero)));
       ptr  = align_shift_right<N-1>(ptr,permute(p,vint<N>(zero)));
     }
 
+    template<int N>
+    __forceinline void isort_quick_update(vint<N> &dist, const vint<N> &d)
+    {
+      dist = align_shift_right<N-1>(dist,permute(d,vint<N>(zero)));
+    }
+
+
+    __forceinline size_t permuteExtract(const vint8& index, const vllong4& n0, const vllong4& n1)
+    {
+      return toScalar(permutex2var((__m256i)index,n0,n1));
+    }
+
+    __forceinline size_t permuteExtract(const vint8& index, const vllong4& n0)
+    {
+      return toScalar(permute(n0,(__m256i)index));
+    }
+
+    __forceinline size_t permuteExtract(const vint4& index, const vllong4& n0)
+    {
+      return permuteExtract(_mm256_castsi128_si256(index),n0);
+    }
+
+    template<int N>
+    __forceinline float permuteExtract(const vint<N>& index, const vfloat<N>& n)
+    {
+      return toScalar(permute(n,index));
+    }
+
+    // FIXME: old code will be removed soon
     template<int N, int Nx, int types, class NodeRef, class BaseNode>
     static __forceinline void traverseClosestHitAVX512VL(NodeRef& cur,
                                                          size_t mask,
@@ -271,8 +311,8 @@ namespace embree
       distance = vfloat<N>::compact((int)mask,distance,tNear);
 
       cur = node->child((unsigned int)toScalar(children));
-      cur.prefetch(types);
 
+      cur.prefetch(types);
 
       mask &= mask-1;
       if (likely(mask == 0)) return;
@@ -382,7 +422,7 @@ namespace embree
 
       /* >=5 hits: reverse to descending order for writing to stack */
 
-      const size_t hits = 4 + __popcnt(mask);
+      const size_t hits = 4 + popcnt(mask);
       const vfloat<N> dist_A2  = select(m_dist3, dist_A1, d3);
       vfloat<N> dist(neg_inf);
       vint<N> ptr(zero);
@@ -419,7 +459,7 @@ namespace embree
       }
       cur = node->child((unsigned int)toScalar(ptr));
     }
-#endif
+
 
 #endif
 
@@ -431,6 +471,92 @@ namespace embree
       typedef BVH4::NodeRef NodeRef;
       typedef BVH4::BaseNode BaseNode;
 
+
+#if defined(__AVX512VL__)
+    template<class NodeRef, class BaseNode>
+      static __forceinline void traverseClosestHitAVX512VL4(NodeRef& cur,
+                                                            size_t mask,
+                                                            const vfloat4& tNear,
+                                                            StackItemT<NodeRef>*& stackPtr,
+                                                            StackItemT<NodeRef>* stackEnd)
+    {
+      // new experimental code
+      assert(mask != 0);
+      const BaseNode* node = (types == BVH_FLAG_ALIGNED_NODE) ? cur.alignedNode() : cur.baseNode(types);
+      vint4 distance_i = (asInt(tNear) & 0xfffffff8) | vint4(step);
+      distance_i = vint4::compact((int)mask,distance_i,distance_i);
+      const vllong4 n0 = vllong4::loadu((vllong4*)node->children);
+
+      cur = permuteExtract(distance_i,n0);
+      cur.prefetch(types);
+
+      mask &= mask-1;
+      if (likely(mask == 0)) return;
+
+      /* 2 hits: order A0 B0 */
+      const vint4 d0(distance_i);
+      const vint4 d1(shuffle<1>(distance_i));
+      cur = permuteExtract(d1,n0);
+      cur.prefetch(types);
+
+      const vint4 dist_A0 = min(d0, d1);
+      const vint4 dist_B0 = max(d0, d1);
+
+      mask &= mask-1;
+      if (likely(mask == 0)) {
+        cur                        = permuteExtract(dist_A0,n0);
+        stackPtr[0].ptr            = permuteExtract(dist_B0,n0);
+        *(float*)&stackPtr[0].dist = permuteExtract(dist_B0,tNear);
+        stackPtr++;
+        return;
+      }
+
+      /* 3 hits: order A1 B1 C1 */
+
+      const vint4 d2(shuffle<2>(distance_i));
+      cur = permuteExtract(d2,n0);
+      cur.prefetch(types);
+
+      const vint4 dist_A1     = min(dist_A0,d2);
+      const vint4 dist_tmp_B1 = max(dist_A0,d2);
+      const vint4 dist_B1     = min(dist_B0,dist_tmp_B1);
+      const vint4 dist_C1     = max(dist_B0,dist_tmp_B1);        
+
+      mask &= mask-1;
+      if (likely(mask == 0)) {
+        cur                        = permuteExtract(dist_A1,n0);
+        stackPtr[0].ptr            = permuteExtract(dist_C1,n0);
+        *(float*)&stackPtr[0].dist = permuteExtract(dist_C1,tNear);
+        stackPtr[1].ptr            = permuteExtract(dist_B1,n0);
+        *(float*)&stackPtr[1].dist = permuteExtract(dist_B1,tNear);
+        stackPtr+=2;
+        return;
+      }
+
+      /* 4 hits: order A2 B2 C2 D2 */
+
+      const vint4 d3(shuffle<3>(distance_i));
+      cur = permuteExtract(d3,n0);
+      cur.prefetch(types);
+
+      const vint4 dist_A2     = min(dist_A1,d3);
+      const vint4 dist_tmp_B2 = max(dist_A1,d3);
+      const vint4 dist_B2     = min(dist_B1,dist_tmp_B2);
+      const vint4 dist_tmp_C2 = max(dist_B1,dist_tmp_B2);
+      const vint4 dist_C2     = min(dist_C1,dist_tmp_C2);
+      const vint4 dist_D2     = max(dist_C1,dist_tmp_C2);
+
+      cur = permuteExtract(dist_A2,n0);
+      stackPtr[0].ptr            = permuteExtract(dist_D2,n0);
+      *(float*)&stackPtr[0].dist = permuteExtract(dist_D2,tNear);
+      stackPtr[1].ptr            = permuteExtract(dist_C2,n0);
+      *(float*)&stackPtr[1].dist = permuteExtract(dist_C2,tNear);
+      stackPtr[2].ptr            = permuteExtract(dist_B2,n0);
+      *(float*)&stackPtr[2].dist = permuteExtract(dist_B2,tNear);
+      stackPtr+=3;
+    }
+#endif
+
     public:
       /* Traverses a node with at least one hit child. Optimized for finding the closest hit (intersection). */
       static __forceinline void traverseClosestHit(NodeRef& cur,
@@ -440,12 +566,13 @@ namespace embree
                                                    StackItemT<NodeRef>* stackEnd)
       {
         assert(mask != 0);
-#if defined(__AVX512F__) && 1
+#if defined(__AVX512F__)
 
 #if defined(__AVX512ER__)
         traverseClosestHitAVX512<4,Nx,types,NodeRef,BaseNode>(cur,mask,tNear,stackPtr,stackEnd);
 #elif defined(__AVX512VL__)
-        traverseClosestHitAVX512VL<4,Nx,types,NodeRef,BaseNode>(cur,mask,tNear,stackPtr,stackEnd);
+        //traverseClosestHitAVX512VL<4,4,types,NodeRef,BaseNode>(cur,mask,tNear,stackPtr,stackEnd);
+        traverseClosestHitAVX512VL4<NodeRef,BaseNode>(cur,mask,tNear,stackPtr,stackEnd);
 #else
         static_assert(false);
 #endif
@@ -454,7 +581,7 @@ namespace embree
         const BaseNode* node = cur.baseNode(types);
 
         /*! one child is hit, continue with that child */
-        size_t r = __bscf(mask);
+        size_t r = bscf(mask);
         cur = node->child(r);
         cur.prefetch(types);
         if (likely(mask == 0)) {
@@ -465,7 +592,7 @@ namespace embree
         /*! two children are hit, push far child, and continue with closer child */
         NodeRef c0 = cur;
         const unsigned int d0 = ((unsigned int*)&tNear)[r];
-        r = __bscf(mask);
+        r = bscf(mask);
         NodeRef c1 = node->child(r);
         c1.prefetch(types);
         const unsigned int d1 = ((unsigned int*)&tNear)[r];
@@ -477,6 +604,29 @@ namespace embree
           else         { stackPtr->ptr = c0; stackPtr->dist = d0; stackPtr++; cur = c1; return; }
         }
 
+#if NEW_SORTING_CODE == 1
+        vint4 s0((size_t)c0,(size_t)d0);
+        vint4 s1((size_t)c1,(size_t)d1);
+        r = bscf(mask);
+        NodeRef c2 = node->child(r); c2.prefetch(types); unsigned int d2 = ((unsigned int*)&tNear)[r]; 
+        vint4 s2((size_t)c2,(size_t)d2);
+        /* 3 hits */
+        if (likely(mask == 0)) {
+          StackItemT<NodeRef>::sort3(s0,s1,s2);
+          *(vint4*)&stackPtr[0] = s0; *(vint4*)&stackPtr[1] = s1;
+          cur = toSizeT(s2);
+          stackPtr+=2;
+          return;
+        }
+        r = bscf(mask);
+        NodeRef c3 = node->child(r); c3.prefetch(types); unsigned int d3 = ((unsigned int*)&tNear)[r]; 
+        vint4 s3((size_t)c3,(size_t)d3);
+        /* 4 hits */
+        StackItemT<NodeRef>::sort4(s0,s1,s2,s3);
+        *(vint4*)&stackPtr[0] = s0; *(vint4*)&stackPtr[1] = s1; *(vint4*)&stackPtr[2] = s2;
+        cur = toSizeT(s3);
+        stackPtr+=3;
+#else
         /*! Here starts the slow path for 3 or 4 hit children. We push
          *  all nodes onto the stack to sort them there. */
         assert(stackPtr < stackEnd);
@@ -486,7 +636,7 @@ namespace embree
 
         /*! three children are hit, push all onto stack and sort 3 stack items, continue with closest child */
         assert(stackPtr < stackEnd);
-        r = __bscf(mask);
+        r = bscf(mask);
         NodeRef c = node->child(r); c.prefetch(types); unsigned int d = ((unsigned int*)&tNear)[r]; stackPtr->ptr = c; stackPtr->dist = d; stackPtr++;
         assert(c != BVH::emptyNode);
         if (likely(mask == 0)) {
@@ -497,11 +647,12 @@ namespace embree
 
         /*! four children are hit, push all onto stack and sort 4 stack items, continue with closest child */
         assert(stackPtr < stackEnd);
-        r = __bscf(mask);
+        r = bscf(mask);
         c = node->child(r); c.prefetch(types); d = *(unsigned int*)&tNear[r]; stackPtr->ptr = c; stackPtr->dist = d; stackPtr++;
         assert(c != BVH::emptyNode);
         sort(stackPtr[-1],stackPtr[-2],stackPtr[-3],stackPtr[-4]);
         cur = (NodeRef) stackPtr[-1].ptr; stackPtr--;
+#endif
 #endif
       }
 
@@ -515,7 +666,7 @@ namespace embree
         const BaseNode* node = cur.baseNode(types);
 
         /*! one child is hit, continue with that child */
-        size_t r = __bscf(mask);
+        size_t r = bscf(mask);
         cur = node->child(r); 
         cur.prefetch(types);
 
@@ -527,7 +678,7 @@ namespace embree
 
         for (; ;)
         {
-          r = __bscf(mask);
+          r = bscf(mask);
           cur = node->child(r); cur.prefetch(types);
           assert(cur != BVH::emptyNode);
           if (likely(mask == 0)) return;
@@ -544,6 +695,125 @@ namespace embree
       typedef BVH8 BVH;
       typedef BVH8::NodeRef NodeRef;
       typedef BVH8::BaseNode BaseNode;
+      
+#if defined(__AVX512VL__)
+      template<class NodeRef, class BaseNode>
+        static __forceinline void traverseClosestHitAVX512VL8(NodeRef& cur,
+                                                              size_t mask,
+                                                              const vfloat8& tNear,
+                                                              StackItemT<NodeRef>*& stackPtr,
+                                                              StackItemT<NodeRef>* stackEnd)
+      {
+        assert(mask != 0);
+        const BaseNode* node = (types == BVH_FLAG_ALIGNED_NODE) ? cur.alignedNode() : cur.baseNode(types);
+        const vllong4 n0 = vllong4::loadu((vllong4*)&node->children[0]);
+        const vllong4 n1 = vllong4::loadu((vllong4*)&node->children[4]);
+        vint8 distance_i = (asInt(tNear) & 0xfffffff8) | vint8(step);
+        distance_i = vint8::compact((int)mask,distance_i,distance_i);
+        cur = permuteExtract(distance_i,n0,n1);
+        cur.prefetch(types);
+
+        mask &= mask-1;
+        if (likely(mask == 0)) return;
+
+        /* 2 hits: order A0 B0 */
+        const vint8 d0(distance_i);
+        const vint8 d1(shuffle<1>(distance_i));
+        cur = permuteExtract(d1,n0,n1);
+        cur.prefetch(types);
+
+        const vint8 dist_A0 = min(d0, d1);
+        const vint8 dist_B0 = max(d0, d1);
+
+        mask &= mask-1;
+        if (likely(mask == 0)) {
+          cur                        = permuteExtract(dist_A0,n0,n1);
+          stackPtr[0].ptr            = permuteExtract(dist_B0,n0,n1);
+          *(float*)&stackPtr[0].dist = permuteExtract(dist_B0,tNear);
+          stackPtr++;
+          return;
+        }
+
+        /* 3 hits: order A1 B1 C1 */
+
+        const vint8 d2(shuffle<2>(distance_i));
+        cur = permuteExtract(d2,n0,n1);
+        cur.prefetch(types);
+
+        const vint8 dist_A1     = min(dist_A0,d2);
+        const vint8 dist_tmp_B1 = max(dist_A0,d2);
+        const vint8 dist_B1     = min(dist_B0,dist_tmp_B1);
+        const vint8 dist_C1     = max(dist_B0,dist_tmp_B1);        
+
+        mask &= mask-1;
+        if (likely(mask == 0)) {
+          cur                        = permuteExtract(dist_A1,n0,n1);
+          stackPtr[0].ptr            = permuteExtract(dist_C1,n0,n1);
+          *(float*)&stackPtr[0].dist = permuteExtract(dist_C1,tNear);
+          stackPtr[1].ptr            = permuteExtract(dist_B1,n0,n1);
+          *(float*)&stackPtr[1].dist = permuteExtract(dist_B1,tNear);
+          stackPtr+=2;
+          return;
+        }
+
+        /* 4 hits: order A2 B2 C2 D2 */
+
+        const vint8 d3(shuffle<3>(distance_i));
+        cur = permuteExtract(d3,n0,n1);
+        cur.prefetch(types);
+
+        const vint8 dist_A2     = min(dist_A1,d3);
+        const vint8 dist_tmp_B2 = max(dist_A1,d3);
+        const vint8 dist_B2     = min(dist_B1,dist_tmp_B2);
+        const vint8 dist_tmp_C2 = max(dist_B1,dist_tmp_B2);
+        const vint8 dist_C2     = min(dist_C1,dist_tmp_C2);
+        const vint8 dist_D2     = max(dist_C1,dist_tmp_C2);
+
+        mask &= mask-1;
+        if (likely(mask == 0)) {
+          cur                        = permuteExtract(dist_A2,n0,n1);
+          stackPtr[0].ptr            = permuteExtract(dist_D2,n0,n1);
+          *(float*)&stackPtr[0].dist = permuteExtract(dist_D2,tNear);
+          stackPtr[1].ptr            = permuteExtract(dist_C2,n0,n1);
+          *(float*)&stackPtr[1].dist = permuteExtract(dist_C2,tNear);
+          stackPtr[2].ptr            = permuteExtract(dist_B2,n0,n1);
+          *(float*)&stackPtr[2].dist = permuteExtract(dist_B2,tNear);
+          stackPtr+=3;
+          return;
+        }
+
+        /* >=5 hits: reverse to descending order for writing to stack */
+
+        distance_i = align_shift_right<3>(distance_i,distance_i);
+        const size_t hits = 4 + popcnt(mask);
+        vint8 dist(-1);
+
+        isort_quick_update(dist,dist_A2);
+        isort_quick_update(dist,dist_B2);
+        isort_quick_update(dist,dist_C2);
+        isort_quick_update(dist,dist_D2);
+
+        do {
+
+          distance_i = align_shift_right<1>(distance_i,distance_i);
+          cur = permuteExtract(distance_i,n0,n1);
+          cur.prefetch(types);
+          const vint8 new_dist(permute(distance_i,vint8(zero)));
+          mask &= mask-1;
+          isort_update(dist,new_dist);
+
+        } while(mask);
+
+        for (size_t i=0;i<hits-1;i++)
+        {
+          stackPtr->ptr            = permuteExtract(dist,n0,n1);
+          *(float*)&stackPtr->dist = permuteExtract(dist,tNear);
+          dist = align_shift_right<1>(dist,dist);
+          stackPtr++;
+        }
+        cur = permuteExtract(dist,n0,n1);
+      }
+#endif
 
     public:
       static __forceinline void traverseClosestHit(NodeRef& cur,
@@ -553,12 +823,13 @@ namespace embree
                                                    StackItemT<NodeRef>* stackEnd)
       {
         assert(mask != 0);
-#if defined(__AVX512F__) && 1
+#if defined(__AVX512F__)
 
 #if defined(__AVX512ER__)
         traverseClosestHitAVX512<8,Nx,types,NodeRef,BaseNode>(cur,mask,tNear,stackPtr,stackEnd);
 #elif defined(__AVX512VL__)
-        traverseClosestHitAVX512VL<8,Nx,types,NodeRef,BaseNode>(cur,mask,tNear,stackPtr,stackEnd);
+        //traverseClosestHitAVX512VL<8,8,types,NodeRef,BaseNode>(cur,mask,tNear,stackPtr,stackEnd);
+        traverseClosestHitAVX512VL8<NodeRef,BaseNode>(cur,mask,tNear,stackPtr,stackEnd);
 #else
         static_assert(false);
 #endif
@@ -567,7 +838,7 @@ namespace embree
         const BaseNode* node = cur.baseNode(types);
 
         /*! one child is hit, continue with that child */
-        size_t r = __bscf(mask);
+        size_t r = bscf(mask);
         cur = node->child(r);
         cur.prefetch(types);
         if (likely(mask == 0)) {
@@ -578,7 +849,7 @@ namespace embree
         /*! two children are hit, push far child, and continue with closer child */
         NodeRef c0 = cur;
         const unsigned int d0 = ((unsigned int*)&tNear)[r];
-        r = __bscf(mask);
+        r = bscf(mask);
         NodeRef c1 = node->child(r);
         c1.prefetch(types);
         const unsigned int d1 = ((unsigned int*)&tNear)[r];
@@ -590,7 +861,49 @@ namespace embree
           if (d0 < d1) { stackPtr->ptr = c1; stackPtr->dist = d1; stackPtr++; cur = c0; return; }
           else         { stackPtr->ptr = c0; stackPtr->dist = d0; stackPtr++; cur = c1; return; }
         }
+#if NEW_SORTING_CODE == 1
+        vint4 s0((size_t)c0,(size_t)d0);
+        vint4 s1((size_t)c1,(size_t)d1);
 
+        r = bscf(mask);
+        NodeRef c2 = node->child(r); c2.prefetch(types); unsigned int d2 = ((unsigned int*)&tNear)[r]; 
+        vint4 s2((size_t)c2,(size_t)d2);
+        /* 3 hits */
+        if (likely(mask == 0)) {
+          StackItemT<NodeRef>::sort3(s0,s1,s2);
+          *(vint4*)&stackPtr[0] = s0; *(vint4*)&stackPtr[1] = s1;
+          cur = toSizeT(s2);
+          stackPtr+=2;
+          return;
+        }
+        r = bscf(mask);
+        NodeRef c3 = node->child(r); c3.prefetch(types); unsigned int d3 = ((unsigned int*)&tNear)[r]; 
+        vint4 s3((size_t)c3,(size_t)d3);
+        /* 4 hits */
+        if (likely(mask == 0)) {
+          StackItemT<NodeRef>::sort4(s0,s1,s2,s3);
+          *(vint4*)&stackPtr[0] = s0; *(vint4*)&stackPtr[1] = s1; *(vint4*)&stackPtr[2] = s2;
+          cur = toSizeT(s3);
+          stackPtr+=3;
+          return;
+        }
+        *(vint4*)&stackPtr[0] = s0; *(vint4*)&stackPtr[1] = s1; *(vint4*)&stackPtr[2] = s2; *(vint4*)&stackPtr[3] = s3;
+        /*! fallback case if more than 4 children are hit */
+        StackItemT<NodeRef>* stackFirst = stackPtr;
+        stackPtr+=4;      
+        while (1)
+        {
+          assert(stackPtr < stackEnd);
+          r = bscf(mask);
+          NodeRef c = node->child(r); c.prefetch(types); unsigned int d = *(unsigned int*)&tNear[r]; 
+          const vint4 s((size_t)c,(size_t)d);
+          *(vint4*)stackPtr++ = s;
+          assert(c != BVH::emptyNode);
+          if (unlikely(mask == 0)) break;
+        }
+        sort(stackFirst,stackPtr);
+        cur = (NodeRef) stackPtr[-1].ptr; stackPtr--;
+#else
         /*! Here starts the slow path for 3 or 4 hit children. We push
          *  all nodes onto the stack to sort them there. */
         assert(stackPtr < stackEnd);
@@ -600,7 +913,7 @@ namespace embree
 
         /*! three children are hit, push all onto stack and sort 3 stack items, continue with closest child */
         assert(stackPtr < stackEnd);
-        r = __bscf(mask);
+        r = bscf(mask);
         NodeRef c = node->child(r); c.prefetch(types); unsigned int d = ((unsigned int*)&tNear)[r]; stackPtr->ptr = c; stackPtr->dist = d; stackPtr++;
         assert(c != BVH::emptyNode);
         if (likely(mask == 0)) {
@@ -611,7 +924,7 @@ namespace embree
 
         /*! four children are hit, push all onto stack and sort 4 stack items, continue with closest child */
         assert(stackPtr < stackEnd);
-        r = __bscf(mask);
+        r = bscf(mask);
         c = node->child(r); c.prefetch(types); d = *(unsigned int*)&tNear[r]; stackPtr->ptr = c; stackPtr->dist = d; stackPtr++;
         assert(c != BVH::emptyNode);
         if (likely(mask == 0)) {
@@ -619,19 +932,19 @@ namespace embree
           cur = (NodeRef) stackPtr[-1].ptr; stackPtr--;
           return;
         }
-
         /*! fallback case if more than 4 children are hit */
         StackItemT<NodeRef>* stackFirst = stackPtr-4;
         while (1)
         {
           assert(stackPtr < stackEnd);
-          r = __bscf(mask);
+          r = bscf(mask);
           c = node->child(r); c.prefetch(types); d = *(unsigned int*)&tNear[r]; stackPtr->ptr = c; stackPtr->dist = d; stackPtr++;
           assert(c != BVH::emptyNode);
           if (unlikely(mask == 0)) break;
         }
         sort(stackFirst,stackPtr);
         cur = (NodeRef) stackPtr[-1].ptr; stackPtr--;
+#endif
 #endif
       }
 
@@ -644,7 +957,7 @@ namespace embree
         const BaseNode* node = cur.baseNode(types);
 
         /*! one child is hit, continue with that child */
-        size_t r = __bscf(mask);
+        size_t r = bscf(mask);
         cur = node->child(r);
         cur.prefetch(types);
 
@@ -656,7 +969,7 @@ namespace embree
 
         for (; ;)
         {
-          r = __bscf(mask);
+          r = bscf(mask);
           cur = node->child(r); cur.prefetch(types);
           assert(cur != BVH::emptyNode);
           if (likely(mask == 0)) return;
@@ -664,270 +977,6 @@ namespace embree
           *stackPtr = cur; stackPtr++;
         }
       }
-    };
-
-
-    /*! BVH transform node traversal for single rays. */
-    template<int N, int Nx, bool robust, int types, bool transform>
-    class BVHNNodeTraverser1Transform;
-
-#define ENABLE_TRANSFORM_CACHE 0
-
-    template<int N, int Nx, bool robust, int types>
-      class BVHNNodeTraverser1Transform<N, Nx, robust, types, true>
-    {
-      typedef BVHN<N> BVH;
-      typedef typename BVH::NodeRef NodeRef;
-      typedef typename BVH::TransformNode TransformNode;
-
-    public:
-      __forceinline explicit BVHNNodeTraverser1Transform(const TravRayBase<N,Nx,robust>& tray)
-#if ENABLE_TRANSFORM_CACHE
-        : cacheSlot(0), cacheTag(-1)
-#endif
-      {
-        new (&topRay) TravRayBase<N,Nx,robust>(tray);
-      }
-
-      /* If a transform node is passed, traverses the node and returns true. */
-      __forceinline bool traverseTransform(NodeRef& cur,
-                                           RayHit& ray,
-                                           TravRayBase<N,Nx,robust>& tray,
-                                           IntersectContext* context,
-                                           StackItemT<NodeRef>*& stackPtr,
-                                           StackItemT<NodeRef>* stackEnd)
-      {
-        /*! process transformation node */
-        if (unlikely(cur.isTransformNode(types)))
-        {
-          STAT3(normal.trav_xfm_nodes,1,1,1);
-          const TransformNode* node = cur.transformNode();
-#if defined(EMBREE_RAY_MASK)
-          if (unlikely((ray.mask & node->mask) == 0)) return true;
-#endif          
-          //context->geomID_to_instID = &node->instID;
-          context->instID = ray.instID;
-          context->geomID = ray.geomID;
-          ray.instID = node->instID;
-          ray.geomID = -1;
-
-#if ENABLE_TRANSFORM_CACHE
-          const vboolx xfm_hit = cacheTag == vintx(node->xfmID);
-          if (likely(any(xfm_hit))) {
-            const int slot = __bsf(movemask(xfm_hit));
-            tray = cacheEntry[slot];
-            ray.org = Vec3fa(tray.org_xyz,ray.tnear());
-            ray.dir = Vec3fa(tray.dir_xyz,ray.tfar);
-          } 
-          else 
-#endif
-            //if (likely(!node->identity)) 
-          {
-            const Vec3fa ray_org = Vec3fa(xfmPoint (node->world2local, ((TravRayBase<N,Nx,robust>&)topRay).org_xyz),ray.tnear());
-            const Vec3fa ray_dir = Vec3fa(xfmVector(node->world2local, ((TravRayBase<N,Nx,robust>&)topRay).dir_xyz),ray.tfar);
-            new (&tray) TravRayBase<N,Nx,robust>(ray_org,ray_dir);
-            ray.org = ray_org;
-            ray.dir = ray_dir;
-#if ENABLE_TRANSFORM_CACHE
-            cacheTag  [cacheSlot&(VSIZEX-1)] = node->xfmID;
-            cacheEntry[cacheSlot&(VSIZEX-1)] = tray;
-            cacheSlot++;
-#endif
-          }
-          stackPtr->ptr = BVH::popRay; stackPtr->dist = neg_inf; stackPtr++;
-          stackPtr->ptr = node->child; stackPtr->dist = neg_inf; stackPtr++;
-          return true;
-        }
-
-        /*! restore toplevel ray */
-        if (cur == BVH::popRay)
-        {
-          //context->geomID_to_instID = nullptr;
-          tray = (TravRayBase<N,Nx,robust>&)topRay;
-          ray.org = Vec3fa(((TravRayBase<N,Nx,robust>&)topRay).org_xyz,ray.tnear());
-          ray.dir = Vec3fa(((TravRayBase<N,Nx,robust>&)topRay).dir_xyz,ray.tfar);
-          if (ray.geomID == -1) {
-            ray.instID = context->instID;
-            ray.geomID = context->geomID;
-          }
-          return true;
-        }
-
-        return false;
-      }
-
-      /* If a transform node is passed, traverses the node and returns true. */
-      __forceinline bool traverseTransform(NodeRef& cur,
-                                           RayHit& ray,
-                                           TravRayBase<N,Nx,robust>& tray,
-                                           IntersectContext* context,
-                                           NodeRef*& stackPtr,
-                                           NodeRef* stackEnd)
-      {
-        /*! process transformation node */
-        if (unlikely(cur.isTransformNode(types)))
-        {
-          STAT3(shadow.trav_xfm_nodes,1,1,1);
-          const TransformNode* node = cur.transformNode();
-#if defined(EMBREE_RAY_MASK)
-          if (unlikely((ray.mask & node->mask) == 0)) return true;
-#endif
-          //context->geomID_to_instID = &node->instID;
-          context->instID = ray.instID;
-          context->geomID = ray.geomID;
-          ray.instID = node->instID;
-          ray.geomID = -1;
-
-#if ENABLE_TRANSFORM_CACHE
-          const vboolx xfm_hit = cacheTag == vintx(node->xfmID);
-          if (likely(any(xfm_hit))) {
-            const int slot = __bsf(movemask(xfm_hit));
-            tray = cacheEntry[slot];
-            ray.org = Vec3fa(tray.org_xyz,ray.tnear());
-            ray.dir = Vec3fa(tray.dir_xyz,ray.tfar);
-          } 
-          else 
-#endif
-            //if (likely(!node->identity)) 
-          {
-            const Vec3fa ray_org = Vec3fa(xfmPoint (node->world2local, ((TravRayBase<N,Nx,robust>&)topRay).org_xyz),ray.tnear());
-            const Vec3fa ray_dir = Vec3fa(xfmVector(node->world2local, ((TravRayBase<N,Nx,robust>&)topRay).dir_xyz),ray.tfar);
-            new (&tray) TravRayBase<N,Nx,robust>(ray_org, ray_dir);
-            ray.org = ray_org;
-            ray.dir = ray_dir;
-#if ENABLE_TRANSFORM_CACHE
-            cacheTag  [cacheSlot&(VSIZEX-1)] = node->xfmID;
-            cacheEntry[cacheSlot&(VSIZEX-1)] = tray;
-            cacheSlot++;
-#endif
-          }
-          *stackPtr = BVH::popRay; stackPtr++;
-          *stackPtr = node->child; stackPtr++;
-          return true;
-        }
-
-        /*! restore toplevel ray */
-        if (cur == BVH::popRay)
-        {
-          //context->geomID_to_instID = nullptr;
-          tray = (TravRayBase<N,Nx,robust>&)topRay;
-          ray.org = Vec3fa(((TravRayBase<N,Nx,robust>&)topRay).org_xyz,ray.tnear());
-          ray.dir = Vec3fa(((TravRayBase<N,Nx,robust>&)topRay).dir_xyz,ray.tfar);
-          if (ray.geomID == -1) {
-            ray.instID = context->instID;
-            ray.geomID = context->geomID;
-          }
-          return true;
-        }
-
-        return false;
-      }
-
-      __forceinline bool traverseTransform(NodeRef& cur,
-                                           Ray& ray,
-                                           TravRayBase<N,Nx,robust>& tray,
-                                           IntersectContext* context,
-                                           NodeRef*& stackPtr,
-                                           NodeRef* stackEnd)
-      {
-        /*! process transformation node */
-        if (unlikely(cur.isTransformNode(types)))
-        {
-          STAT3(shadow.trav_xfm_nodes,1,1,1);
-          const TransformNode* node = cur.transformNode();
-#if defined(EMBREE_RAY_MASK)
-          if (unlikely((ray.mask & node->mask) == 0)) return true;
-#endif
-          //context->geomID_to_instID = &node->instID;
-
-#if ENABLE_TRANSFORM_CACHE
-          const vboolx xfm_hit = cacheTag == vintx(node->xfmID);
-          if (likely(any(xfm_hit))) {
-            const int slot = __bsf(movemask(xfm_hit));
-            tray = cacheEntry[slot];
-            ray.org = Vec3fa(tray.org_xyz,ray.tnear());
-            ray.dir = Vec3fa(tray.dir_xyz,ray.tfar);
-          }
-          else
-#endif
-            //if (likely(!node->identity))
-          {
-            const Vec3fa ray_org = Vec3fa(xfmPoint (node->world2local, ((TravRayBase<N,Nx,robust>&)topRay).org_xyz),ray.tnear());
-            const Vec3fa ray_dir = Vec3fa(xfmVector(node->world2local, ((TravRayBase<N,Nx,robust>&)topRay).dir_xyz),ray.tfar);
-            new (&tray) TravRayBase<N,Nx,robust>(ray_org, ray_dir);
-            ray.org = ray_org;
-            ray.dir = ray_dir;
-#if ENABLE_TRANSFORM_CACHE
-            cacheTag  [cacheSlot&(VSIZEX-1)] = node->xfmID;
-            cacheEntry[cacheSlot&(VSIZEX-1)] = tray;
-            cacheSlot++;
-#endif
-          }
-          *stackPtr = BVH::popRay; stackPtr++;
-          *stackPtr = node->child; stackPtr++;
-          return true;
-        }
-
-        /*! restore toplevel ray */
-        if (cur == BVH::popRay)
-        {
-          //context->geomID_to_instID = nullptr;
-          tray = (TravRayBase<N,Nx,robust>&)topRay;
-          ray.org = Vec3fa(((TravRayBase<N,Nx,robust>&)topRay).org_xyz,ray.tnear());
-          ray.dir = Vec3fa(((TravRayBase<N,Nx,robust>&)topRay).dir_xyz,ray.tfar);
-          return true;
-        }
-
-        return false;
-      }
-
-    private:
-      TravRayBase<N,Nx,robust> topRay;
-
-#if ENABLE_TRANSFORM_CACHE
-    private:
-      unsigned int cacheSlot;
-      vintx cacheTag;
-      TravRayBase<N,Nx,robust> cacheEntry[VSIZEX];
-#endif
-    };
-
-    template<int N, int Nx, bool robust, int types>
-      class BVHNNodeTraverser1Transform<N, Nx, robust, types, false>
-    {
-      typedef BVHN<N> BVH;
-      typedef typename BVH::NodeRef NodeRef;
-
-    public:
-      __forceinline explicit BVHNNodeTraverser1Transform(const TravRayBase<N,Nx,robust>& tray) {}
-
-      __forceinline bool traverseTransform(NodeRef& cur,
-                                           Ray& ray,
-                                           TravRayBase<N,Nx,robust>& tray,
-                                           IntersectContext* context,
-                                           StackItemT<NodeRef>*& stackPtr,
-                                           StackItemT<NodeRef>* stackEnd)
-      {
-        return false;
-      }
-
-      __forceinline bool traverseTransform(NodeRef& cur,
-                                           Ray& ray,
-                                           TravRayBase<N,Nx,robust>& tray,
-                                           IntersectContext* context,
-                                           NodeRef*& stackPtr,
-                                           NodeRef* stackEnd)
-      {
-        return false;
-      }
-    };
-
-    /*! BVH node traversal for single rays. */
-    template<int N, int Nx, bool robust, int types>
-      class BVHNNodeTraverser1 : public BVHNNodeTraverser1Hit<N, Nx, types>, public BVHNNodeTraverser1Transform<N, Nx, robust, types, (bool)(types & BVH_FLAG_TRANSFORM_NODE)>
-    {
-    public:
-      __forceinline explicit BVHNNodeTraverser1(const TravRayBase<N,Nx,robust>& tray) : BVHNNodeTraverser1Transform<N, Nx, robust, types, (bool)(types & BVH_FLAG_TRANSFORM_NODE)>(tray) {}
     };
   }
 }

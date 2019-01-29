@@ -54,11 +54,5 @@ namespace embree
     std::vector<Ref<SceneGraph::MaterialNode>> materials; //!< list of materials
     std::vector<Ref<SceneGraph::Node> > geometries;   //!< list of geometries
     std::vector<Ref<SceneGraph::Light>> lights;       //!< list of lights
-  public:
-    std::map<Ref<SceneGraph::MaterialNode>, unsigned> material2id;
-    std::map<Ref<SceneGraph::Node>, unsigned> geometry2id;
-  public:
-    std::vector<RTCScene> geomID_to_scene;           //!< map a geometry ID to the scene it might have been created for it in case of instancing
-    std::vector<void*> geomID_to_inst;       //!< maps instance ID to instance structure
   };
 }

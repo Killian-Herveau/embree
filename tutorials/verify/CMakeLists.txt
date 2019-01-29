@@ -14,21 +14,30 @@
 ## limitations under the License.                                           ##
 ## ======================================================================== ##
 
-ADD_EXECUTABLE(verify verify.cpp api_c99.c ../common/tutorial/application.cpp)
+ADD_LIBRARY(c99_compile_test STATIC api_c99.c)
+
+ADD_EXECUTABLE(verify verify.cpp ../common/tutorial/application.cpp)
 TARGET_LINK_LIBRARIES(verify sys math scenegraph embree)
 SET_PROPERTY(TARGET verify PROPERTY FOLDER tutorials)
+SET_PROPERTY(TARGET verify APPEND PROPERTY COMPILE_FLAGS " ${FLAGS_LOWEST}")
 INSTALL(TARGETS verify DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT examples)
+SIGN_TARGET(verify)
 
 IF (EMBREE_TESTING_INTENSITY GREATER 0)
 
+  IF (EMBREE_TESTING_INTENSITY GREATER 1)
+    ADD_TEST(NAME verify COMMAND verify --no-colors --intensity 2)
+  ELSE()
+    ADD_TEST(NAME verify COMMAND verify --no-colors)
+  ENDIF()
   
-  ADD_TEST(NAME verify COMMAND verify --no-colors)
   SET_TESTS_PROPERTIES(verify PROPERTIES TIMEOUT 7000)
 
-  IF (EMBREE_TESTING_MEMCHECK AND EMBREE_MEMORYCHECK_COMMAND)
+  IF (EMBREE_TESTING_MEMCHECK)
     ADD_MEMCHECK_TEST(verify_memcheck verify 
        --no-colors --intensity 0.1 
        --skip .*memory_consumption.*
+       --skip .*regression_.*_build_join  # causes some issues with TBB
        --skip .*SSE4.*              # to run faster
        --skip .*AVX.*               # valgrind does not support AVX
        --skip .*AVX2.*              # valgrind does not support AVX2

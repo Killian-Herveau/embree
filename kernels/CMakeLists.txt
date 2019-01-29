@@ -47,17 +47,19 @@ SET(EMBREE_LIBRARY_FILES
   common/geometry.cpp
   common/scene_user_geometry.cpp
   common/scene_instance.cpp
-  common/scene_geometry_instance.cpp
   common/scene_triangle_mesh.cpp
   common/scene_quad_mesh.cpp
-  common/scene_bezier_curves.cpp
+  common/scene_curves.cpp
   common/scene_line_segments.cpp
+  common/scene_grid_mesh.cpp
+  common/scene_points.cpp
 
   subdiv/bezier_curve.cpp
   subdiv/bspline_curve.cpp
 
-  geometry/primitive.cpp
+  geometry/primitive4.cpp
   geometry/instance_intersector.cpp
+  geometry/curve_intersector_virtual.cpp
   builders/primrefgen.cpp
 
   bvh/bvh.cpp
@@ -72,8 +74,9 @@ SET(EMBREE_LIBRARY_FILES
   bvh/bvh_builder_hair_mb.cpp
   bvh/bvh_builder_morton.cpp
   bvh/bvh_builder_sah.cpp
+  bvh/bvh_builder_sah_spatial.cpp
+  bvh/bvh_builder_sah_mb.cpp
   bvh/bvh_builder_twolevel.cpp
-  bvh/bvh_builder_instancing.cpp
 
   bvh/bvh_intersector1_bvh4.cpp
   )
@@ -101,23 +104,33 @@ MACRO(embree_files TARGET ISA)
       
   SET(${TARGET}
     geometry/instance_intersector.cpp
+    geometry/curve_intersector_virtual.cpp
     bvh/bvh_intersector1_bvh4.cpp)
 
-  IF (${ISA} EQUAL ${SSE2} OR ${ISA} EQUAL ${AVX} OR ${ISA} EQUAL ${AVX512KNL} OR ${ISA_LOWEST} EQUAL ${ISA})
+  IF (${ISA} EQUAL ${ISA_LOWEST_AVX})
+    LIST(APPEND ${TARGET} geometry/primitive8.cpp)
+  ENDIF() 
+
+  IF (${ISA} EQUAL ${SSE2} OR ${ISA} EQUAL ${AVX} OR ${ISA} EQUAL ${AVX2} OR ${ISA} EQUAL ${AVX512KNL} OR ${ISA} EQUAL ${AVX512SKX} OR ${ISA_LOWEST} EQUAL ${ISA})
     
     LIST(APPEND ${TARGET}
+      common/scene_user_geometry.cpp
+      common/scene_instance.cpp
       common/scene_triangle_mesh.cpp
       common/scene_quad_mesh.cpp 
-      common/scene_bezier_curves.cpp
+      common/scene_curves.cpp
       common/scene_line_segments.cpp
+      common/scene_grid_mesh.cpp
+      common/scene_points.cpp
       
       bvh/bvh_refit.cpp
       bvh/bvh_builder.cpp
       bvh/bvh_builder_hair.cpp
       bvh/bvh_builder_hair_mb.cpp
       bvh/bvh_builder_sah.cpp
-      bvh/bvh_builder_twolevel.cpp
-      bvh/bvh_builder_instancing.cpp)
+      bvh/bvh_builder_sah_spatial.cpp
+      bvh/bvh_builder_sah_mb.cpp
+      bvh/bvh_builder_twolevel.cpp)
 
     IF (EMBREE_GEOMETRY_SUBDIVISION)
       LIST(APPEND ${TARGET} bvh/bvh_builder_subdiv.cpp)
@@ -229,6 +242,9 @@ ENDIF()
 #  SET_PROPERTY(TARGET embree_sse2 PROPERTY FOLDER kernels)
 #  SET(EMBREE_LIBRARIES ${EMBREE_LIBRARIES} embree_sse2)
 #  CheckGlobals(embree_sse2)
+#IF (EMBREE_STATIC_LIB)
+#    INSTALL(TARGETS embree_sse2 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel)
+#  ENDIF()
 #ENDIF ()
 
 IF (EMBREE_ISA_SSE42 AND EMBREE_LIBRARY_FILES_SSE42)
@@ -238,6 +254,9 @@ IF (EMBREE_ISA_SSE42 AND EMBREE_LIBRARY_FILES_SSE42)
   SET_PROPERTY(TARGET embree_sse42 PROPERTY FOLDER kernels)
   SET(EMBREE_LIBRARIES ${EMBREE_LIBRARIES} embree_sse42)
   CheckGlobals(embree_sse42)
+  IF (EMBREE_STATIC_LIB)
+    INSTALL(TARGETS embree_sse42 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel)
+  ENDIF()
 ENDIF ()
 
 IF (EMBREE_ISA_AVX  AND EMBREE_LIBRARY_FILES_AVX)
@@ -247,6 +266,9 @@ IF (EMBREE_ISA_AVX  AND EMBREE_LIBRARY_FILES_AVX)
   SET_PROPERTY(TARGET embree_avx PROPERTY FOLDER kernels)
   SET(EMBREE_LIBRARIES ${EMBREE_LIBRARIES} embree_avx)
   CheckGlobals(embree_avx)
+  IF (EMBREE_STATIC_LIB)
+    INSTALL(TARGETS embree_avx ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel)
+  ENDIF()
 ENDIF()
 
 IF (EMBREE_ISA_AVX2 AND EMBREE_LIBRARY_FILES_AVX2)
@@ -256,6 +278,9 @@ IF (EMBREE_ISA_AVX2 AND EMBREE_LIBRARY_FILES_AVX2)
   SET_PROPERTY(TARGET embree_avx2 PROPERTY FOLDER kernels)
   SET(EMBREE_LIBRARIES ${EMBREE_LIBRARIES} embree_avx2)
   CheckGlobals(embree_avx2)
+  IF (EMBREE_STATIC_LIB)
+    INSTALL(TARGETS embree_avx2 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel)
+  ENDIF()
 ENDIF()
 
 IF (EMBREE_ISA_AVX512KNL AND EMBREE_LIBRARY_FILES_AVX512KNL)
@@ -265,6 +290,9 @@ IF (EMBREE_ISA_AVX512KNL AND EMBREE_LIBRARY_FILES_AVX512KNL)
   SET_PROPERTY(TARGET embree_avx512knl PROPERTY FOLDER kernels)
   SET(EMBREE_LIBRARIES ${EMBREE_LIBRARIES} embree_avx512knl)
   CheckGlobals(embree_avx512knl)
+  IF (EMBREE_STATIC_LIB)
+    INSTALL(TARGETS embree_avx512knl ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel)
+  ENDIF()
 ENDIF()
 
 IF (EMBREE_ISA_AVX512SKX AND EMBREE_LIBRARY_FILES_AVX512SKX)
@@ -274,6 +302,9 @@ IF (EMBREE_ISA_AVX512SKX AND EMBREE_LIBRARY_FILES_AVX512SKX)
   SET_PROPERTY(TARGET embree_avx512skx PROPERTY FOLDER kernels)
   SET(EMBREE_LIBRARIES ${EMBREE_LIBRARIES} embree_avx512skx)
   CheckGlobals(embree_avx512skx)
+  IF (EMBREE_STATIC_LIB)
+    INSTALL(TARGETS embree_avx512skx ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel)
+  ENDIF()
 ENDIF()
 
 TARGET_LINK_LIBRARIES(embree ${EMBREE_LIBRARIES} sys math simd lexers tasking)
@@ -308,3 +339,5 @@ IF (NOT EMBREE_STATIC_LIB)
     LIBRARY NAMELINK_ONLY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
   )
 ENDIF()
+
+SIGN_TARGET(embree)

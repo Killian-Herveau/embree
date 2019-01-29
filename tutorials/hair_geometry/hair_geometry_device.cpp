@@ -48,7 +48,6 @@ void occlusionFilter(const RTCFilterFunctionNArguments* args);
 
 /* scene data */
 extern "C" ISPCScene* g_ispc_scene;
-RTCDevice g_device = nullptr;
 RTCScene g_scene = nullptr;
 
 /*! Uniform hemisphere sampling. Up direction is the z direction. */
@@ -80,7 +79,7 @@ void convertHairSet(ISPCHairSet* hair, RTCScene scene_out)
   }
   rtcSetSharedGeometryBuffer(geom,RTC_BUFFER_TYPE_INDEX,0,RTC_FORMAT_UINT,hair->hairs,0,sizeof(ISPCHair),hair->numHairs);
   rtcSetGeometryOccludedFilterFunction(geom,occlusionFilter);
-  rtcSetGeometryTessellationRate(geom,hair->tessellation_rate);
+  rtcSetGeometryTessellationRate(geom,(float)hair->tessellation_rate);
   rtcCommitGeometry(geom);
   rtcAttachGeometry(scene_out,geom);
   rtcReleaseGeometry(geom);
@@ -215,7 +214,7 @@ inline Vec3fa AnisotropicBlinn__sample(const AnisotropicBlinn* This, const Vec3f
 
 typedef Vec3fa* uniform_Vec3fa_ptr;
 
-inline Vec3fa evalBezier(const int geomID, const int primID, const float t)
+inline Vec3fa evalBezier(const unsigned int geomID, const unsigned int primID, const float t)
 {
   const float t0 = 1.0f - t, t1 = t;
   const ISPCHairSet* hair = (const ISPCHairSet*) g_ispc_scene->geometries[geomID];
@@ -416,9 +415,9 @@ void renderTileStandard(int taskIndex,
     /* write color to framebuffer */
     Vec3fa accu_color = g_accu[y*width+x] + Vec3fa(color.x,color.y,color.z,1.0f); g_accu[y*width+x] = accu_color;
     float f = rcp(max(0.001f,accu_color.w));
-    unsigned int r = (unsigned int) (255.0f * clamp(accu_color.x*f,0.0f,1.0f));
-    unsigned int g = (unsigned int) (255.0f * clamp(accu_color.y*f,0.0f,1.0f));
-    unsigned int b = (unsigned int) (255.0f * clamp(accu_color.z*f,0.0f,1.0f));
+    unsigned int r = (unsigned int) (255.01f * clamp(accu_color.x*f,0.0f,1.0f));
+    unsigned int g = (unsigned int) (255.01f * clamp(accu_color.y*f,0.0f,1.0f));
+    unsigned int b = (unsigned int) (255.01f * clamp(accu_color.z*f,0.0f,1.0f));
     pixels[y*width+x] = (b << 16) + (g << 8) + r;
   }
 }
@@ -450,13 +449,6 @@ extern "C" void device_init (char* cfg)
   hair_Kr = 0.2f*hair_K;    //!< reflectivity of hair
   hair_Kt = 0.8f*hair_K;    //!< transparency of hair
 
-  /* create new Embree device */
-  g_device = rtcNewDevice(cfg);
-  error_handler(nullptr,rtcGetDeviceError(g_device));
-
-  /* set error handler */
-  rtcSetDeviceErrorFunction(g_device,error_handler,nullptr);
-
   /* set start render mode */
   renderTile = renderTileStandard;
   key_pressed_handler = device_key_pressed_default;
@@ -475,7 +467,7 @@ extern "C" void device_render (int* pixels,
 {
   /* create accumulator */
   if (g_accu_width != width || g_accu_height != height) {
-    g_accu = (Vec3fa*) alignedMalloc(width*height*sizeof(Vec3fa));
+    g_accu = (Vec3fa*) alignedMalloc(width*height*sizeof(Vec3fa),16);
     g_accu_width = width;
     g_accu_height = height;
     for (unsigned int i=0; i<width*height; i++)
@@ -509,7 +501,6 @@ extern "C" void device_render (int* pixels,
 extern "C" void device_cleanup ()
 {
   rtcReleaseScene (g_scene); g_scene = nullptr;
-  rtcReleaseDevice(g_device); g_device = nullptr;
   alignedFree(g_accu); g_accu = nullptr;
   g_accu_width = 0;
   g_accu_height = 0;

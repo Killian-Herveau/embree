@@ -22,12 +22,6 @@
 
 namespace embree
 {
-  /* Visual Studio 2012 link error workaround */
-  PrecomputedBezierBasis bezier_basis0;
-  PrecomputedBezierBasis bezier_basis1;
-  PrecomputedBSplineBasis bspline_basis0;
-  PrecomputedBSplineBasis bspline_basis1;
-
   /* error reporting function */
   void error_handler(void* userPtr, const RTCError code, const char* str)
   {
@@ -210,7 +204,7 @@ namespace embree
       for (size_t i=0; i<accelN->accels.size(); i++) {
         if (accelN->accels[i]->intersectors.ptr->type == AccelData::TY_BVH4) {
           bvh4 = (BVH4*)accelN->accels[i]->intersectors.ptr;
-          if (bvh4->primTy->name == "triangle4v") break;
+          if (std::string(bvh4->primTy->name()) == "triangle4v") break;
           bvh4 = nullptr;
         }
       }

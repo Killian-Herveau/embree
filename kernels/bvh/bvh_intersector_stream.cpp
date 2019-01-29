@@ -23,12 +23,10 @@
 #include "../geometry/trianglei_intersector.h"
 #include "../geometry/quadv_intersector.h"
 #include "../geometry/quadi_intersector.h"
-#include "../geometry/bezier1v_intersector.h"
-#include "../geometry/bezier1i_intersector.h"
 #include "../geometry/linei_intersector.h"
-#include "../geometry/subdivpatch1eager_intersector.h"
-//#include "../geometry/subdivpatch1cached_intersector.h"
+#include "../geometry/subdivpatch1_intersector.h"
 #include "../geometry/object_intersector.h"
+#include "../geometry/instance_intersector.h"
 
 #include "../common/scene.h"
 #include <bitset>
@@ -50,6 +48,11 @@ namespace embree
                                                                                                     size_t numOctantRays,
                                                                                                     IntersectContext* context)
     {
+      /* we may traverse an empty BVH in case all geometry was invalid */
+      BVH* __restrict__ bvh = (BVH*) This->ptr;
+      if (bvh->root == BVH::emptyNode)
+        return;
+      
       // Only the coherent code path is implemented
       assert(context->isCoherent());
       intersectCoherent(This, (RayHitK<VSIZEL>**)inputPackets, numOctantRays, context);
@@ -145,18 +148,18 @@ namespace embree
         /*! intersect stream of rays with all primitives */
         size_t lazy_node = 0;
 #if defined(__SSE4_2__)
-        STAT_USER(1,(__popcnt(bits)+K-1)/K*4);
+        STAT_USER(1,(popcnt(bits)+K-1)/K*4);
 #endif
         while(bits)
         {
-          size_t i = __bsf(bits) / K;
+          size_t i = bsf(bits) / K;
           const size_t m_isec = ((((size_t)1 << K)-1) << (i*K));
           assert(m_isec & bits);
           bits &= ~m_isec;
 
           TravRayKStream<K, robust>& p = packets[i];
           vbool<K> m_valid = p.tnear <= p.tfar;
-          PrimitiveIntersectorK<K>::intersectK(m_valid, *inputPackets[i], context, prim, num, lazy_node);
+          PrimitiveIntersectorK<K>::intersectK(m_valid, This, *inputPackets[i], context, prim, num, lazy_node);
           p.tfar = min(p.tfar, inputPackets[i]->tfar);
         };
 
@@ -169,6 +172,11 @@ namespace embree
                                                                                                    size_t numOctantRays,
                                                                                                    IntersectContext* context)
     {
+      /* we may traverse an empty BVH in case all geometry was invalid */
+      BVH* __restrict__ bvh = (BVH*) This->ptr;
+      if (bvh->root == BVH::emptyNode)
+        return;
+      
       if (unlikely(context->isCoherent()))
         occludedCoherent(This, (RayK<VSIZEL>**)inputPackets, numOctantRays, context);
       else
@@ -269,17 +277,17 @@ namespace embree
         /*! intersect stream of rays with all primitives */
         size_t lazy_node = 0;
 #if defined(__SSE4_2__)
-        STAT_USER(1,(__popcnt(bits)+K-1)/K*4);
+        STAT_USER(1,(popcnt(bits)+K-1)/K*4);
 #endif
         while (bits)
         {
-          size_t i = __bsf(bits) / K;
+          size_t i = bsf(bits) / K;
           const size_t m_isec = ((((size_t)1 << K)-1) << (i*K));
           assert(m_isec & bits);
           bits &= ~m_isec;
           TravRayKStream<K, robust>& p = packets[i];
           vbool<K> m_valid = p.tnear <= p.tfar;
-          vbool<K> m_hit = PrimitiveIntersectorK<K>::occludedK(m_valid, *inputPackets[i], context, prim, num, lazy_node);
+          vbool<K> m_hit = PrimitiveIntersectorK<K>::occludedK(m_valid, This, *inputPackets[i], context, prim, num, lazy_node);
           inputPackets[i]->tfar = select(m_hit & m_valid, vfloat<K>(neg_inf), inputPackets[i]->tfar);
           m_active &= ~((size_t)movemask(m_hit) << (i*K));
         }
@@ -352,7 +360,7 @@ namespace embree
           vint<Nx>::storeu(child_mask, vmask); // this explicit store here causes much better code generation
           
           /*! one child is hit, continue with that child */
-          size_t r = __bscf(mask);
+          size_t r = bscf(mask);
           assert(r < N);
           cur = node->child(r);         
           cur.prefetch(types);
@@ -367,7 +375,7 @@ namespace embree
 
           for (; ;)
           {
-            r = __bscf(mask);
+            r = bscf(mask);
             assert(r < N);
 
             cur = node->child(r);          
@@ -391,11 +399,11 @@ namespace embree
 
         for (; bits != 0;)
         {
-          const size_t rayID = __bscf(bits);
+          const size_t rayID = bscf(bits);
 
           RayK<K> &ray = *inputPackets[rayID / K];
           const size_t k = rayID % K;
-          if (PrimitiveIntersectorK<K>::occluded(ray, k, context, prim, num, lazy_node))
+          if (PrimitiveIntersectorK<K>::occluded(This, ray, k, context, prim, num, lazy_node))
           {
             ray.tfar[k] = neg_inf;
             terminated |= (size_t)1 << rayID;
@@ -460,6 +468,10 @@ namespace embree
 
     struct ObjectIntersectorStream {
       template<int K> using Type = ArrayIntersectorKStream<K,ObjectIntersectorK<K COMMA false>>;
+    };
+
+    struct InstanceIntersectorStream {
+      template<int K> using Type = ArrayIntersectorKStream<K,InstanceIntersectorK<K>>;
     };
 
     // =====================================================================================================

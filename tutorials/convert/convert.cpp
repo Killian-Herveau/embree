@@ -21,15 +21,20 @@
 
 namespace embree
 {
+  extern "C" {
+    RTCDevice g_device = nullptr;
+  }
+  
   /* name of the tutorial */
   bool embedTextures = true;
+  bool referenceMaterials = false;
   bool referenceObjects = true;
   float centerScale = 0.0f;
   Vec3fa centerTranslate(0.0f,0.0f,0.0f);
 
   struct HeightField : public RefCount
   {
-    ALIGNED_STRUCT;
+    ALIGNED_STRUCT_(16);
 
     HeightField (Ref<Image> texture, const BBox3fa& bounds)
       : texture(texture), bounds(bounds) {}
@@ -201,12 +206,12 @@ namespace embree
 
       /* flatten scene */
       else if (tag == "-flatten-group") {
-        g_scene = SceneGraph::flatten(g_scene,SceneGraph::INSTANCING_SCENE_GROUP);
+        g_scene = SceneGraph::flatten(g_scene,SceneGraph::INSTANCING_GROUP);
       }
 
       /* flatten scene */
       else if (tag == "-flatten-geometry") {
-        g_scene = SceneGraph::flatten(g_scene,SceneGraph::INSTANCING_SCENE_GEOMETRY);
+        g_scene = SceneGraph::flatten(g_scene,SceneGraph::INSTANCING_GEOMETRY);
       }
 
       /* flatten scene */
@@ -259,6 +264,11 @@ namespace embree
         embedTextures = false;
       }
 
+      /* enable material referencing */
+      else if (tag == "-reference-materials") {
+        referenceMaterials = true;
+      }
+
       /* enable object embedding */
       else if (tag == "-embed-objects") {
         referenceObjects = false;
@@ -278,7 +288,7 @@ namespace embree
 
       /* output filename */
       else if (tag == "-o") {
-        SceneGraph::store(g_scene.dynamicCast<SceneGraph::Node>(),path + cin->getFileName(),embedTextures);
+        SceneGraph::store(g_scene.dynamicCast<SceneGraph::Node>(),path + cin->getFileName(),embedTextures,referenceMaterials);
       }
 
       /* skip unknown command line parameter */
@@ -293,12 +303,15 @@ namespace embree
   /* main function in embree namespace */
   int main(int argc, char** argv) 
   {
+    g_device = rtcNewDevice(nullptr);
+      
     /* create stream for parsing */
     Ref<ParseStream> stream = new ParseStream(new CommandLineStream(argc, argv));
 
     /* parse command line */  
     parseCommandLine(stream, FileName());
 
+    rtcReleaseDevice(g_device); g_device = nullptr;
     return 0;
   }
 }

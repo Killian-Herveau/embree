@@ -61,6 +61,7 @@ namespace embree
         permY = select(vfloat<16>(dir.y) >= 0.0f, id, id2);
         permZ = select(vfloat<16>(dir.z) >= 0.0f, id, id2);
 #endif
+
       }
 
       template<int K>
@@ -541,14 +542,14 @@ namespace embree
     }
 
     //////////////////////////////////////////////////////////////////////////////////////
-    // Fast QuantizedNode intersection
+    // Fast QuantizedBaseNode intersection
     //////////////////////////////////////////////////////////////////////////////////////
 
     template<int N, int Nx, bool robust>
-      __forceinline size_t intersectNode(const typename BVHN<N>::QuantizedNode* node, const TravRay<N,Nx,robust>& ray, vfloat<Nx>& dist);
+      __forceinline size_t intersectNode(const typename BVHN<N>::QuantizedBaseNode* node, const TravRay<N,Nx,robust>& ray, vfloat<Nx>& dist);
 
     template<>
-      __forceinline size_t intersectNode<4,4>(const typename BVH4::QuantizedNode* node, const TravRay<4,4,false>& ray, vfloat4& dist)
+      __forceinline size_t intersectNode<4,4>(const typename BVH4::QuantizedBaseNode* node, const TravRay<4,4,false>& ray, vfloat4& dist)
     {
       const vfloat4 start_x(node->start.x);
       const vfloat4 scale_x(node->scale.x);
@@ -599,10 +600,42 @@ namespace embree
       return mask;
     }
 
+    template<>
+      __forceinline size_t intersectNode<4,4>(const typename BVH4::QuantizedBaseNode* node, const TravRay<4,4,true>& ray, vfloat4& dist)
+    {
+      const vfloat4 start_x(node->start.x);
+      const vfloat4 scale_x(node->scale.x);
+      const vfloat4 lower_x = madd(node->dequantize<4>(ray.nearX >> 2),scale_x,start_x);
+      const vfloat4 upper_x = madd(node->dequantize<4>(ray.farX  >> 2),scale_x,start_x);
+      const vfloat4 start_y(node->start.y);
+      const vfloat4 scale_y(node->scale.y);
+      const vfloat4 lower_y = madd(node->dequantize<4>(ray.nearY >> 2),scale_y,start_y);
+      const vfloat4 upper_y = madd(node->dequantize<4>(ray.farY  >> 2),scale_y,start_y);
+      const vfloat4 start_z(node->start.z);
+      const vfloat4 scale_z(node->scale.z);
+      const vfloat4 lower_z = madd(node->dequantize<4>(ray.nearZ >> 2),scale_z,start_z);
+      const vfloat4 upper_z = madd(node->dequantize<4>(ray.farZ  >> 2),scale_z,start_z);
+
+      const vfloat4 tNearX = (lower_x - ray.org.x) * ray.rdir_far.x;
+      const vfloat4 tNearY = (lower_y - ray.org.y) * ray.rdir_far.y;
+      const vfloat4 tNearZ = (lower_z - ray.org.z) * ray.rdir_far.z;
+      const vfloat4 tFarX  = (upper_x - ray.org.x) * ray.rdir_far.x;
+      const vfloat4 tFarY  = (upper_y - ray.org.y) * ray.rdir_far.y;
+      const vfloat4 tFarZ  = (upper_z - ray.org.z) * ray.rdir_far.z;
+      
+      const vfloat4 tNear = max(tNearX,tNearY,tNearZ,ray.tnear);
+      const vfloat4 tFar  = min(tFarX ,tFarY ,tFarZ ,ray.tfar);
+      const vbool4 vmask = tNear <= tFar;
+      const size_t mask = movemask(vmask);
+      dist = tNear;
+      return mask;
+    }
+
+
 #if defined(__AVX__)
 
     template<>
-      __forceinline size_t intersectNode<8,8>(const typename BVH8::QuantizedNode* node, const TravRay<8,8,false>& ray, vfloat8& dist)
+      __forceinline size_t intersectNode<8,8>(const typename BVH8::QuantizedBaseNode* node, const TravRay<8,8,false>& ray, vfloat8& dist)
     {
       const vfloat8 start_x(node->start.x);
       const vfloat8 scale_x(node->scale.x);
@@ -653,12 +686,45 @@ namespace embree
       return mask;
     }
 
+    template<>
+      __forceinline size_t intersectNode<8,8>(const typename BVH8::QuantizedBaseNode* node, const TravRay<8,8,true>& ray, vfloat8& dist)
+    {
+      const vfloat8 start_x(node->start.x);
+      const vfloat8 scale_x(node->scale.x);
+      const vfloat8 lower_x = madd(node->dequantize<8>(ray.nearX >> 2),scale_x,start_x);
+      const vfloat8 upper_x = madd(node->dequantize<8>(ray.farX  >> 2),scale_x,start_x);
+      const vfloat8 start_y(node->start.y);
+      const vfloat8 scale_y(node->scale.y);
+      const vfloat8 lower_y = madd(node->dequantize<8>(ray.nearY >> 2),scale_y,start_y);
+      const vfloat8 upper_y = madd(node->dequantize<8>(ray.farY  >> 2),scale_y,start_y);
+      const vfloat8 start_z(node->start.z);
+      const vfloat8 scale_z(node->scale.z);
+      const vfloat8 lower_z = madd(node->dequantize<8>(ray.nearZ >> 2),scale_z,start_z);
+      const vfloat8 upper_z = madd(node->dequantize<8>(ray.farZ  >> 2),scale_z,start_z);
+
+      const vfloat8 tNearX = (lower_x - ray.org.x) * ray.rdir_far.x;
+      const vfloat8 tNearY = (lower_y - ray.org.y) * ray.rdir_far.y;
+      const vfloat8 tNearZ = (lower_z - ray.org.z) * ray.rdir_far.z;
+      const vfloat8 tFarX  = (upper_x - ray.org.x) * ray.rdir_far.x;
+      const vfloat8 tFarY  = (upper_y - ray.org.y) * ray.rdir_far.y;
+      const vfloat8 tFarZ  = (upper_z - ray.org.z) * ray.rdir_far.z;
+      
+      const vfloat8 tNear = max(tNearX,tNearY,tNearZ,ray.tnear);
+      const vfloat8 tFar  = min(tFarX ,tFarY ,tFarZ ,ray.tfar);
+      const vbool8 vmask = tNear <= tFar;
+      const size_t mask = movemask(vmask);
+
+      dist = tNear;
+      return mask;
+    }
+
+
 #endif
 
 #if defined(__AVX512F__) && !defined(__AVX512VL__) // KNL
 
     template<>
-      __forceinline size_t intersectNode<4,16>(const typename BVH4::QuantizedNode* node, const TravRay<4,16,false>& ray, vfloat16& dist)
+      __forceinline size_t intersectNode<4,16>(const typename BVH4::QuantizedBaseNode* node, const TravRay<4,16,false>& ray, vfloat16& dist)
     {
       const vfloat16 start_x(node->start.x);
       const vfloat16 scale_x(node->scale.x);
@@ -688,24 +754,224 @@ namespace embree
     }
 
     template<>
-      __forceinline size_t intersectNode<8,16>(const typename BVH8::QuantizedNode* node, const TravRay<8,16,false>& ray, vfloat16& dist)
+      __forceinline size_t intersectNode<4,16>(const typename BVH4::QuantizedBaseNode* node, const TravRay<4,16,true>& ray, vfloat16& dist)
     {
-      const vllong8 invalid((size_t)BVH8::emptyNode);
-      const vboold8 m_valid(invalid != vllong8::loadu(node->children));
-      const vfloat16 bminmaxX = node->dequantizeLowerUpperX<16>(ray.permX);
-      const vfloat16 bminmaxY = node->dequantizeLowerUpperY<16>(ray.permY);
-      const vfloat16 bminmaxZ = node->dequantizeLowerUpperZ<16>(ray.permZ);
+      const vfloat16 start_x(node->start.x);
+      const vfloat16 scale_x(node->scale.x);
+      const vfloat16 lower_x = madd(vfloat16(node->dequantize<4>(ray.nearX >> 2)),scale_x,start_x);
+      const vfloat16 upper_x = madd(vfloat16(node->dequantize<4>(ray.farX  >> 2)),scale_x,start_x);
+      const vfloat16 start_y(node->start.y);
+      const vfloat16 scale_y(node->scale.y);
+      const vfloat16 lower_y = madd(vfloat16(node->dequantize<4>(ray.nearY >> 2)),scale_y,start_y);
+      const vfloat16 upper_y = madd(vfloat16(node->dequantize<4>(ray.farY  >> 2)),scale_y,start_y);
+      const vfloat16 start_z(node->start.z);
+      const vfloat16 scale_z(node->scale.z);
+      const vfloat16 lower_z = madd(vfloat16(node->dequantize<4>(ray.nearZ >> 2)),scale_z,start_z);
+      const vfloat16 upper_z = madd(vfloat16(node->dequantize<4>(ray.farZ  >> 2)),scale_z,start_z);
+
+      const vfloat16 tNearX = (lower_x - ray.org.x) * ray.rdir_far.x;
+      const vfloat16 tNearY = (lower_y - ray.org.y) * ray.rdir_far.y;
+      const vfloat16 tNearZ = (lower_z - ray.org.z) * ray.rdir_far.z;
+      const vfloat16 tFarX  = (upper_x - ray.org.x) * ray.rdir_far.x;
+      const vfloat16 tFarY  = (upper_y - ray.org.y) * ray.rdir_far.y;
+      const vfloat16 tFarZ  = (upper_z - ray.org.z) * ray.rdir_far.z;
+
+      const vfloat16 tNear  = max(tNearX,tNearY,tNearZ,ray.tnear);
+      const vfloat16 tFar   = min(tFarX ,tFarY ,tFarZ ,ray.tfar);
+      const vbool16 vmask   = le(vbool16(0xf),tNear,tFar);
+      const size_t mask     = movemask(vmask);
+      dist = tNear;
+      return mask;
+    }
+
+    template<>
+      __forceinline size_t intersectNode<8,16>(const typename BVH8::QuantizedBaseNode* node, const TravRay<8,16,false>& ray, vfloat16& dist)
+    {
+      const vbool16 m_valid(node->validMask16());
+      const vfloat16 bminmaxX  = node->dequantizeLowerUpperX(ray.permX);
+      const vfloat16 bminmaxY  = node->dequantizeLowerUpperY(ray.permY);
+      const vfloat16 bminmaxZ  = node->dequantizeLowerUpperZ(ray.permZ);
       const vfloat16 tNearFarX = msub(bminmaxX, ray.rdir.x, ray.org_rdir.x);
       const vfloat16 tNearFarY = msub(bminmaxY, ray.rdir.y, ray.org_rdir.y);
       const vfloat16 tNearFarZ = msub(bminmaxZ, ray.rdir.z, ray.org_rdir.z);
       const vfloat16 tNear     = max(tNearFarX, tNearFarY, tNearFarZ, ray.tnear);
       const vfloat16 tFar      = min(tNearFarX, tNearFarY, tNearFarZ, ray.tfar);
-      const vbool16 vmask      = le(vboolf16(m_valid),tNear,align_shift_right<8>(tFar, tFar));
+      const vbool16 vmask      = le(m_valid,tNear,align_shift_right<8>(tFar, tFar));
       const size_t mask        = movemask(vmask);
       dist = tNear;
       return mask;
     }
+
+    template<>
+      __forceinline size_t intersectNode<8,16>(const typename BVH8::QuantizedBaseNode* node, const TravRay<8,16,true>& ray, vfloat16& dist)
+    {
+      const vbool16 m_valid(node->validMask16());
+      const vfloat16 bminmaxX  = node->dequantizeLowerUpperX(ray.permX);
+      const vfloat16 bminmaxY  = node->dequantizeLowerUpperY(ray.permY);
+      const vfloat16 bminmaxZ  = node->dequantizeLowerUpperZ(ray.permZ);
+      const vfloat16 tNearFarX = (bminmaxX - ray.org.x) * ray.rdir_far.x;
+      const vfloat16 tNearFarY = (bminmaxY - ray.org.y) * ray.rdir_far.y;
+      const vfloat16 tNearFarZ = (bminmaxZ - ray.org.z) * ray.rdir_far.z;
+      const vfloat16 tNear     = max(tNearFarX, tNearFarY, tNearFarZ, ray.tnear);
+      const vfloat16 tFar      = min(tNearFarX, tNearFarY, tNearFarZ, ray.tfar);
+      const vbool16 vmask      = le(m_valid,tNear,align_shift_right<8>(tFar, tFar));
+      const size_t mask        = movemask(vmask);
+      dist = tNear;
+      return mask;
+    }
+
     
+#endif
+
+
+    template<int N, int Nx>
+      __forceinline size_t intersectNode(const typename BVHN<N>::QuantizedBaseNodeMB* node, const TravRay<N,Nx,false>& ray, const float time, vfloat<N>& dist)
+    {
+      const vboolf<N> mvalid    = node->validMask();
+      const vfloat<N> lower_x   = node->dequantizeLowerX(time);
+      const vfloat<N> upper_x   = node->dequantizeUpperX(time);
+      const vfloat<N> lower_y   = node->dequantizeLowerY(time);
+      const vfloat<N> upper_y   = node->dequantizeUpperY(time);
+      const vfloat<N> lower_z   = node->dequantizeLowerZ(time);
+      const vfloat<N> upper_z   = node->dequantizeUpperZ(time);     
+#if defined(__AVX2__)
+      const vfloat<N> tNearX = msub(lower_x, ray.rdir.x, ray.org_rdir.x);
+      const vfloat<N> tNearY = msub(lower_y, ray.rdir.y, ray.org_rdir.y);
+      const vfloat<N> tNearZ = msub(lower_z, ray.rdir.z, ray.org_rdir.z);
+      const vfloat<N> tFarX  = msub(upper_x, ray.rdir.x, ray.org_rdir.x);
+      const vfloat<N> tFarY  = msub(upper_y, ray.rdir.y, ray.org_rdir.y);
+      const vfloat<N> tFarZ  = msub(upper_z, ray.rdir.z, ray.org_rdir.z);
+#else
+      const vfloat<N> tNearX = (lower_x - ray.org.x) * ray.rdir.x;
+      const vfloat<N> tNearY = (lower_y - ray.org.y) * ray.rdir.y;
+      const vfloat<N> tNearZ = (lower_z - ray.org.z) * ray.rdir.z;
+      const vfloat<N> tFarX  = (upper_x - ray.org.x) * ray.rdir.x;
+      const vfloat<N> tFarY  = (upper_y - ray.org.y) * ray.rdir.y;
+      const vfloat<N> tFarZ  = (upper_z - ray.org.z) * ray.rdir.z;
+#endif      
+
+      const vfloat<N> tminX = mini(tNearX,tFarX);
+      const vfloat<N> tmaxX = maxi(tNearX,tFarX);
+      const vfloat<N> tminY = mini(tNearY,tFarY);
+      const vfloat<N> tmaxY = maxi(tNearY,tFarY);
+      const vfloat<N> tminZ = mini(tNearZ,tFarZ);
+      const vfloat<N> tmaxZ = maxi(tNearZ,tFarZ);
+      const vfloat<N> tNear = maxi(tminX,tminY,tminZ,ray.tnear);
+      const vfloat<N> tFar  = mini(tmaxX,tmaxY,tmaxZ,ray.tfar);
+#if defined(__AVX512F__) && !defined(__AVX512ER__) // SKX
+      const vbool<N> vmask =  le(mvalid,asInt(tNear),asInt(tFar));
+#else
+      const vbool<N> vmask = (asInt(tNear) <= asInt(tFar)) & mvalid;
+#endif
+      const size_t mask = movemask(vmask);
+      dist = tNear;
+      return mask;      
+    }
+
+    template<int N, int Nx>
+      __forceinline size_t intersectNode(const typename BVHN<N>::QuantizedBaseNodeMB* node, const TravRay<N,Nx,true>& ray, const float time, vfloat<N>& dist)
+    {
+      const vboolf<N> mvalid    = node->validMask();
+      const vfloat<N> lower_x   = node->dequantizeLowerX(time);
+      const vfloat<N> upper_x   = node->dequantizeUpperX(time);
+      const vfloat<N> lower_y   = node->dequantizeLowerY(time);
+      const vfloat<N> upper_y   = node->dequantizeUpperY(time);
+      const vfloat<N> lower_z   = node->dequantizeLowerZ(time);
+      const vfloat<N> upper_z   = node->dequantizeUpperZ(time);     
+      const vfloat<N> tNearX = (lower_x - ray.org.x) * ray.rdir_far.x;
+      const vfloat<N> tNearY = (lower_y - ray.org.y) * ray.rdir_far.y;
+      const vfloat<N> tNearZ = (lower_z - ray.org.z) * ray.rdir_far.z;
+      const vfloat<N> tFarX  = (upper_x - ray.org.x) * ray.rdir_far.x;
+      const vfloat<N> tFarY  = (upper_y - ray.org.y) * ray.rdir_far.y;
+      const vfloat<N> tFarZ  = (upper_z - ray.org.z) * ray.rdir_far.z;
+
+      const vfloat<N> tminX = mini(tNearX,tFarX);
+      const vfloat<N> tmaxX = maxi(tNearX,tFarX);
+      const vfloat<N> tminY = mini(tNearY,tFarY);
+      const vfloat<N> tmaxY = maxi(tNearY,tFarY);
+      const vfloat<N> tminZ = mini(tNearZ,tFarZ);
+      const vfloat<N> tmaxZ = maxi(tNearZ,tFarZ);
+      const vfloat<N> tNear = maxi(tminX,tminY,tminZ,ray.tnear);
+      const vfloat<N> tFar  = mini(tmaxX,tmaxY,tmaxZ,ray.tfar);
+#if defined(__AVX512F__) && !defined(__AVX512ER__) // SKX
+      const vbool<N> vmask =  le(mvalid,asInt(tNear),asInt(tFar));
+#else
+      const vbool<N> vmask = (asInt(tNear) <= asInt(tFar)) & mvalid;
+#endif
+      const size_t mask = movemask(vmask);
+      dist = tNear;
+      return mask;      
+    }
+
+
+#if defined(__AVX512ER__)
+    // for KNL
+    template<>
+      __forceinline size_t intersectNode<4,16>(const typename BVHN<4>::QuantizedBaseNodeMB* node, const TravRay<4,16,false>& ray, const float time, vfloat<4>& dist)
+    {
+      const size_t  mvalid    = movemask(node->validMask());
+      const vfloat16 lower_x  = node->dequantizeLowerX(time);
+      const vfloat16 upper_x  = node->dequantizeUpperX(time);
+      const vfloat16 lower_y  = node->dequantizeLowerY(time);
+      const vfloat16 upper_y  = node->dequantizeUpperY(time);
+      const vfloat16 lower_z  = node->dequantizeLowerZ(time);
+      const vfloat16 upper_z  = node->dequantizeUpperZ(time);     
+
+      const vfloat16 tNearX = msub(lower_x, ray.rdir.x, ray.org_rdir.x);
+      const vfloat16 tNearY = msub(lower_y, ray.rdir.y, ray.org_rdir.y);
+      const vfloat16 tNearZ = msub(lower_z, ray.rdir.z, ray.org_rdir.z);
+      const vfloat16 tFarX  = msub(upper_x, ray.rdir.x, ray.org_rdir.x);
+      const vfloat16 tFarY  = msub(upper_y, ray.rdir.y, ray.org_rdir.y);
+      const vfloat16 tFarZ  = msub(upper_z, ray.rdir.z, ray.org_rdir.z);
+
+      const vfloat16 tminX = min(tNearX,tFarX);
+      const vfloat16 tmaxX = max(tNearX,tFarX);
+      const vfloat16 tminY = min(tNearY,tFarY);
+      const vfloat16 tmaxY = max(tNearY,tFarY);
+      const vfloat16 tminZ = min(tNearZ,tFarZ);
+      const vfloat16 tmaxZ = max(tNearZ,tFarZ);
+      const vfloat16 tNear = max(tminX,tminY,tminZ,ray.tnear);
+      const vfloat16 tFar  = min(tmaxX,tmaxY,tmaxZ,ray.tfar );
+      const vbool16 vmask =  tNear <= tFar;
+      const size_t mask = movemask(vmask) & mvalid;
+      dist = extractN<4,0>(tNear);
+      return mask;      
+    }
+
+
+    // for KNL
+    template<>
+      __forceinline size_t intersectNode<4,16>(const typename BVHN<4>::QuantizedBaseNodeMB* node, const TravRay<4,16,true>& ray, const float time, vfloat<4>& dist)
+    {
+      const size_t  mvalid    = movemask(node->validMask());
+      const vfloat16 lower_x  = node->dequantizeLowerX(time);
+      const vfloat16 upper_x  = node->dequantizeUpperX(time);
+      const vfloat16 lower_y  = node->dequantizeLowerY(time);
+      const vfloat16 upper_y  = node->dequantizeUpperY(time);
+      const vfloat16 lower_z  = node->dequantizeLowerZ(time);
+      const vfloat16 upper_z  = node->dequantizeUpperZ(time);     
+
+      const vfloat16 tNearX = (lower_x - ray.org.x) * ray.rdir_far.x;
+      const vfloat16 tNearY = (lower_y - ray.org.y) * ray.rdir_far.y;
+      const vfloat16 tNearZ = (lower_z - ray.org.z) * ray.rdir_far.z;
+      const vfloat16 tFarX  = (upper_x - ray.org.x) * ray.rdir_far.x;
+      const vfloat16 tFarY  = (upper_y - ray.org.y) * ray.rdir_far.y;
+      const vfloat16 tFarZ  = (upper_z - ray.org.z) * ray.rdir_far.z;
+
+      const vfloat16 tminX = min(tNearX,tFarX);
+      const vfloat16 tmaxX = max(tNearX,tFarX);
+      const vfloat16 tminY = min(tNearY,tFarY);
+      const vfloat16 tmaxY = max(tNearY,tFarY);
+      const vfloat16 tminZ = min(tNearZ,tFarZ);
+      const vfloat16 tmaxZ = max(tNearZ,tFarZ);
+      const vfloat16 tNear = max(tminX,tminY,tminZ,ray.tnear);
+      const vfloat16 tFar  = min(tmaxX,tmaxY,tmaxZ,ray.tfar );
+      const vbool16 vmask =  tNear <= tFar;
+      const size_t mask = movemask(vmask) & mvalid;
+      dist = extractN<4,0>(tNear);
+      return mask;      
+    }
+
 #endif
 
     //////////////////////////////////////////////////////////////////////////////////////
@@ -880,29 +1146,6 @@ namespace embree
     };
 
     template<int N, int Nx>
-    struct BVHNNodeIntersector1<N, Nx, BVH_TN_AN1, false>
-    {
-      static __forceinline bool intersect(const typename BVHN<N>::NodeRef& node, const TravRay<N,Nx,false>& ray, float time, vfloat<Nx>& dist, size_t& mask)
-      {
-        if (likely(node.isAlignedNode())) mask = intersectNode(node.alignedNode(), ray, dist);
-        else return false;
-        return true;
-      }
-    };
-
-    template<int N, int Nx>
-    struct BVHNNodeIntersector1<N, Nx, BVH_TN_AN1_AN2, false>
-    {
-      static __forceinline bool intersect(const typename BVHN<N>::NodeRef& node, const TravRay<N,Nx,false>& ray, float time, vfloat<Nx>& dist, size_t& mask)
-      {
-        if (likely(node.isAlignedNode()))        mask = intersectNode(node.alignedNode(),ray, dist);
-        else if (likely(node.isAlignedNodeMB())) mask = intersectNode(node.alignedNodeMB(),ray, time, dist);
-        else return false;
-        return true;
-      }
-    };
-
-    template<int N, int Nx>
     struct BVHNNodeIntersector1<N, Nx, BVH_QN1, false>
     {
       static __forceinline bool intersect(const typename BVHN<N>::NodeRef& node, const TravRay<N,Nx,false>& ray, float time, vfloat<Nx>& dist, size_t& mask)
@@ -923,5 +1166,41 @@ namespace embree
         return true;
       }
     };
+
+    /*! Intersects N nodes with K rays */
+    template<int N, int Nx, bool robust>
+      struct BVHNQuantizedBaseNodeIntersector1;
+
+    template<int N, int Nx>
+      struct BVHNQuantizedBaseNodeIntersector1<N, Nx, false>
+    {
+      static __forceinline size_t intersect(const typename BVHN<N>::QuantizedBaseNode* node, const TravRay<N,Nx,false>& ray, vfloat<Nx>& dist)
+      {
+        return intersectNode(node,ray,dist);
+      }
+
+      static __forceinline size_t intersect(const typename BVHN<N>::QuantizedBaseNodeMB* node, const TravRay<N,Nx,false>& ray, const float time, vfloat<N>& dist)
+      {
+        return intersectNode(node,ray,time,dist);
+      }
+
+    };
+
+    template<int N, int Nx>
+      struct BVHNQuantizedBaseNodeIntersector1<N, Nx, true>
+    {
+      static __forceinline size_t intersect(const typename BVHN<N>::QuantizedBaseNode* node, const TravRay<N,Nx,true>& ray, vfloat<Nx>& dist)
+      {
+        return intersectNode(node,ray,dist); 
+      }
+
+      static __forceinline size_t intersect(const typename BVHN<N>::QuantizedBaseNodeMB* node, const TravRay<N,Nx,true>& ray, const float time, vfloat<N>& dist)
+      {
+        return intersectNode(node,ray,time,dist);
+      }
+
+    };
+
+
   }
 }

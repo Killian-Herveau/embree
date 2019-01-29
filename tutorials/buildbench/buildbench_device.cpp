@@ -28,7 +28,6 @@ namespace embree {
   extern "C" ISPCScene* g_ispc_scene;
 
   /* scene data */
-  RTCDevice g_device = nullptr;
   RTCScene g_scene = nullptr;
 
   void convertTriangleMesh(ISPCTriangleMesh* mesh, RTCScene scene_out, RTCBuildQuality quality)
@@ -37,7 +36,7 @@ namespace embree {
     rtcSetGeometryTimeStepCount(geom,mesh->numTimeSteps);
     rtcSetGeometryBuildQuality(geom, quality);
     for (size_t t=0; t<mesh->numTimeSteps; t++) {
-      rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_VERTEX, t, RTC_FORMAT_FLOAT3, mesh->positions[t], 0, sizeof(Vec3fa), mesh->numVertices);
+      rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_VERTEX, (unsigned int)t, RTC_FORMAT_FLOAT3, mesh->positions[t], 0, sizeof(Vec3fa), (size_t)mesh->numVertices);
     }
     rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3, mesh->triangles, 0, sizeof(ISPCTriangle), mesh->numTriangles);
     rtcCommitGeometry(geom);
@@ -51,7 +50,7 @@ namespace embree {
     rtcSetGeometryTimeStepCount(geom, mesh->numTimeSteps);
     rtcSetGeometryBuildQuality(geom, quality);
     for (size_t t=0; t<mesh->numTimeSteps; t++) {
-      rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_VERTEX, t, RTC_FORMAT_FLOAT3, mesh->positions[t], 0, sizeof(Vec3fa), mesh->numVertices);
+      rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_VERTEX, (unsigned int)t, RTC_FORMAT_FLOAT3, mesh->positions[t], 0, sizeof(Vec3fa), mesh->numVertices);
     }
     rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT4, mesh->quads, 0, sizeof(ISPCQuad), mesh->numQuads);
     rtcCommitGeometry(geom);
@@ -66,7 +65,7 @@ namespace embree {
     rtcSetGeometryBuildQuality(geom, quality);
     for (size_t i=0; i<mesh->numEdges; i++) mesh->subdivlevel[i] = 16.0f;
     for (size_t t=0; t<mesh->numTimeSteps; t++) {
-      rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_VERTEX, t, RTC_FORMAT_FLOAT3, mesh->positions[t], 0, sizeof(Vec3fa), mesh->numVertices);
+      rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_VERTEX, (unsigned int)t, RTC_FORMAT_FLOAT3, mesh->positions[t], 0, sizeof(Vec3fa), mesh->numVertices);
     }
     rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_LEVEL, 0, RTC_FORMAT_FLOAT, mesh->subdivlevel,      0, sizeof(float),        mesh->numEdges);
     rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT,  mesh->position_indices, 0, sizeof(unsigned int), mesh->numEdges);
@@ -89,7 +88,7 @@ namespace embree {
     rtcSetGeometryBuildQuality(geom, quality);
 
     for (size_t t=0; t<hair->numTimeSteps; t++) {
-      rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_VERTEX, t, RTC_FORMAT_FLOAT4, hair->positions[t], 0, sizeof(Vertex), hair->numVertices);
+      rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_VERTEX, (unsigned int)t, RTC_FORMAT_FLOAT4, hair->positions[t], 0, sizeof(Vertex), hair->numVertices);
     }
     rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT, hair->hairs, 0, sizeof(ISPCHair), hair->numHairs);
     if (hair->type != RTC_GEOMETRY_TYPE_FLAT_LINEAR_CURVE)
@@ -317,18 +316,7 @@ namespace embree {
   /* called by the C++ code for initialization */
   extern "C" void device_init (char* cfg)
   {
-    std::string init("start_threads=1,affinity=1");
-    if (cfg)
-    {
-      init += ",";
-      init += cfg;
-    }
-    /* create new Embree device */
-    g_device = rtcNewDevice(init.c_str());
-    error_handler(nullptr,rtcGetDeviceError(g_device));
-
     /* set error handler */
-    rtcSetDeviceErrorFunction(g_device,error_handler,nullptr);
     Benchmark_Dynamic_Update(g_ispc_scene,iterations_dynamic_dynamic,RTC_BUILD_QUALITY_REFIT);
     Pause();
     Benchmark_Dynamic_Update(g_ispc_scene,iterations_dynamic_dynamic,RTC_BUILD_QUALITY_LOW);
@@ -344,10 +332,9 @@ namespace embree {
     Benchmark_Static_Create(g_ispc_scene,iterations_static_static,RTC_BUILD_QUALITY_MEDIUM,RTC_BUILD_QUALITY_MEDIUM);
     Pause();
     Benchmark_Static_Create(g_ispc_scene,iterations_static_static,RTC_BUILD_QUALITY_MEDIUM,RTC_BUILD_QUALITY_HIGH);
-    rtcReleaseDevice(g_device); g_device = nullptr;
   }
 
-/* called by the C++ code to render */
+  /* called by the C++ code to render */
   extern "C" void device_render (int* pixels,
                                  const unsigned int width,
                                  const unsigned int height,
@@ -356,7 +343,7 @@ namespace embree {
   {
   }
 
-/* renders a single screen tile */
+  /* renders a single screen tile */
   void renderTileStandard(int taskIndex,
                           int threadIndex,
                           int* pixels,
@@ -369,7 +356,7 @@ namespace embree {
   {
   }
 
-/* called by the C++ code for cleanup */
+  /* called by the C++ code for cleanup */
   extern "C" void device_cleanup ()
   {
   }

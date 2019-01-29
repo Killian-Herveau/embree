@@ -36,7 +36,7 @@ namespace embree
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcNewDevice);
     Lock<MutexSys> lock(g_mutex);
-    Device* device = new Device(config, false);
+    Device* device = new Device(config);
     return (RTCDevice) device->refInc();
     RTC_CATCH_END(nullptr);
     return (RTCDevice) nullptr;
@@ -74,6 +74,18 @@ namespace embree
     return device->getProperty(prop);
     RTC_CATCH_END(device);
     return 0;
+  }
+
+  RTC_API void rtcSetDeviceProperty(RTCDevice hdevice, const RTCDeviceProperty prop, ssize_t val)
+  {
+    Device* device = (Device*) hdevice;
+    RTC_CATCH_BEGIN;
+    RTC_TRACE(rtcSetDeviceProperty);
+    const bool internal_prop = (size_t)prop >= 1000000 && (size_t)prop < 1000004;
+    if (!internal_prop) RTC_VERIFY_HANDLE(hdevice); // allow NULL device for special internal settings
+    Lock<MutexSys> lock(g_mutex);
+    device->setProperty(prop,val);
+    RTC_CATCH_END(device);
   }
 
   RTC_API RTCError rtcGetDeviceError(RTCDevice hdevice)
@@ -176,6 +188,7 @@ namespace embree
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetSceneProgressMonitorFunction);
     RTC_VERIFY_HANDLE(hscene);
+    Lock<MutexSys> lock(g_mutex);
     scene->setProgressMonitorFunction(progress,ptr);
     RTC_CATCH_END2(scene);
   }
@@ -791,14 +804,6 @@ namespace embree
     if (((size_t)ray->tfar  ) & 0x03 ) throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "tnear not aligned to 4 bytes");   
     if (((size_t)ray->time  ) & 0x03 ) throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "time not aligned to 4 bytes");   
     if (((size_t)ray->mask  ) & 0x03 ) throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "mask not aligned to 4 bytes");   
-    // if (((size_t)ray->hit.Ng_x  ) & 0x03 ) throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "Ng_x not aligned to 4 bytes");   
-    // if (((size_t)ray->hit.Ng_y  ) & 0x03 ) throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "Ng_y not aligned to 4 bytes");   
-    // if (((size_t)ray->hit.Ng_z  ) & 0x03 ) throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "Ng_z not aligned to 4 bytes");   
-    // if (((size_t)ray->hit.u     ) & 0x03 ) throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "u not aligned to 4 bytes");   
-    // if (((size_t)ray->hit.v     ) & 0x03 ) throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "v not aligned to 4 bytes");   
-    // if (((size_t)ray->hit.geomID) & 0x03 ) throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "geomID not aligned to 4 bytes");   
-    // if (((size_t)ray->hit.primID) & 0x03 ) throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "primID not aligned to 4 bytes");   
-    // if (((size_t)ray->hit.instID) & 0x03 ) throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "instID not aligned to 4 bytes");   
 #endif
     STAT3(shadow.travs,N,N,N);
     IntersectContext context(scene,user_context);
@@ -829,67 +834,9 @@ namespace embree
     RTC_CATCH_END2(scene);
   }
 
-  RTC_API RTCGeometry rtcNewInstance (RTCDevice hdevice, RTCScene hsource, unsigned int numTimeSteps)
-  {
-    Device* device = (Device*) hdevice;
-    Scene* source = (Scene*) hsource;
-    RTC_CATCH_BEGIN;
-    RTC_TRACE(rtcNewInstance);
-    RTC_VERIFY_HANDLE(hdevice);
-    RTC_VERIFY_HANDLE(hsource);
-#if defined(EMBREE_GEOMETRY_USER)
-    Geometry* geom = new Instance(device,source,numTimeSteps);
-    return (RTCGeometry) geom->refInc();
-#else
-    throw_RTCError(RTC_ERROR_UNKNOWN,"rtcNewInstance is not supported");
-#endif
-    RTC_CATCH_END(device);
-    return nullptr;
-  }
-
-  RTC_API RTCGeometry rtcNewGeometryInstance (RTCDevice hdevice,  RTCScene hscene, unsigned geomID) 
-  {
-    Device* device = (Device*) hdevice;
-    Scene* scene = (Scene*) hscene;
-    RTC_CATCH_BEGIN;
-    RTC_TRACE(rtcNewGeometryInstance);
-    RTC_VERIFY_HANDLE(hdevice);
-    RTC_VERIFY_HANDLE(hscene);
-    RTC_VERIFY_GEOMID(geomID);
-    Geometry* geom = new GeometryInstance(device,scene->get_locked(geomID));
-    return (RTCGeometry) geom->refInc();
-    RTC_CATCH_END(device);
-    return nullptr;
-  }
-
-  RTC_API RTCGeometry rtcNewGeometryGroup (RTCDevice hdevice, RTCScene hscene, unsigned* geomIDs, unsigned int N)
-  {
-    Device* device = (Device*) hdevice;
-    Scene* scene = (Scene*) hscene;
-    RTC_CATCH_BEGIN;
-    RTC_TRACE(rtcNewGeometryGroup);
-    RTC_VERIFY_HANDLE(hdevice);
-    RTC_VERIFY_HANDLE(hscene);
-    if (N) RTC_VERIFY_HANDLE(geomIDs);
-
-    std::vector<Ref<Geometry>> geometries(N);
-    for (size_t i=0; i<N; i++) {
-      RTC_VERIFY_GEOMID(geomIDs[i]);
-      geometries[i] = scene->get_locked(geomIDs[i]);
-      if (geometries[i]->getType() == Geometry::GROUP)
-        throw_RTCError(RTC_ERROR_INVALID_ARGUMENT,"geometry groups cannot contain other geometry groups");
-      if (geometries[i]->getType() != geometries[0]->getType())
-        throw_RTCError(RTC_ERROR_INVALID_ARGUMENT,"geometries inside group have to be of same type");
-    }
-    Geometry* geom = new GeometryGroup(device,geometries);
-    return (RTCGeometry) geom->refInc();
-    RTC_CATCH_END(device);
-    return nullptr;
-  }
-
   RTC_API void rtcSetGeometryInstancedScene(RTCGeometry hgeometry, RTCScene hscene)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     Ref<Scene> scene = (Scene*) hscene;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryInstancedScene);
@@ -964,7 +911,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryTransform(RTCGeometry hgeometry, unsigned int timeStep, RTCFormat format, const void* xfm)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryTransform);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1002,14 +949,14 @@ namespace embree
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcNewGeometry);
     RTC_VERIFY_HANDLE(hdevice);
-    
+
     switch (type)
     {
     case RTC_GEOMETRY_TYPE_TRIANGLE:
     {
 #if defined(EMBREE_GEOMETRY_TRIANGLE)
       createTriangleMeshTy createTriangleMesh = nullptr;
-      SELECT_SYMBOL_DEFAULT_AVX(device->enabled_cpu_features,createTriangleMesh);
+      SELECT_SYMBOL_DEFAULT_AVX_AVX2_AVX512KNL_AVX512SKX(device->enabled_cpu_features,createTriangleMesh);
       Geometry* geom = createTriangleMesh(device);
       return (RTCGeometry) geom->refInc();
 #else
@@ -1021,7 +968,7 @@ namespace embree
     {
 #if defined(EMBREE_GEOMETRY_QUAD)
       createQuadMeshTy createQuadMesh = nullptr;
-      SELECT_SYMBOL_DEFAULT_AVX(device->enabled_cpu_features,createQuadMesh);
+      SELECT_SYMBOL_DEFAULT_AVX_AVX2_AVX512KNL_AVX512SKX(device->enabled_cpu_features,createQuadMesh);
       Geometry* geom = createQuadMesh(device);
       return (RTCGeometry) geom->refInc();
 #else
@@ -1029,27 +976,72 @@ namespace embree
 #endif
     }
     
+    case RTC_GEOMETRY_TYPE_SPHERE_POINT:
+    case RTC_GEOMETRY_TYPE_DISC_POINT:
+    case RTC_GEOMETRY_TYPE_ORIENTED_DISC_POINT:
+    {
+#if defined(EMBREE_GEOMETRY_POINT)
+      createPointsTy createPoints = nullptr;
+      SELECT_SYMBOL_DEFAULT_AVX_AVX2_AVX512KNL_AVX512SKX(device->enabled_builder_cpu_features, createPoints);
+
+      Geometry *geom;
+      switch(type) {
+        case RTC_GEOMETRY_TYPE_SPHERE_POINT:
+          geom = createPoints(device, Geometry::GTY_SPHERE_POINT);
+          break;
+        case RTC_GEOMETRY_TYPE_DISC_POINT:
+          geom = createPoints(device, Geometry::GTY_DISC_POINT);
+          break;
+        case RTC_GEOMETRY_TYPE_ORIENTED_DISC_POINT:
+          geom = createPoints(device, Geometry::GTY_ORIENTED_DISC_POINT);
+          break;
+        default:
+          geom = nullptr;
+          break;
+      }
+      return (RTCGeometry) geom->refInc();
+#else
+      throw_RTCError(RTC_ERROR_UNKNOWN,"RTC_GEOMETRY_TYPE_POINT is not supported");
+#endif
+    }
+
     case RTC_GEOMETRY_TYPE_FLAT_LINEAR_CURVE:
+      
     case RTC_GEOMETRY_TYPE_ROUND_BEZIER_CURVE:
     case RTC_GEOMETRY_TYPE_FLAT_BEZIER_CURVE:
+    case RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_BEZIER_CURVE:
+      
     case RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE:
     case RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE:
+    case RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_BSPLINE_CURVE:
+
+    case RTC_GEOMETRY_TYPE_ROUND_HERMITE_CURVE:
+    case RTC_GEOMETRY_TYPE_FLAT_HERMITE_CURVE:
+    case RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_HERMITE_CURVE:
     {
 #if defined(EMBREE_GEOMETRY_CURVE)
       createLineSegmentsTy createLineSegments = nullptr;
-      SELECT_SYMBOL_DEFAULT_AVX(device->enabled_cpu_features,createLineSegments);
-      createCurvesBezierTy createCurvesBezier = nullptr;
-      SELECT_SYMBOL_DEFAULT_AVX(device->enabled_cpu_features,createCurvesBezier);
-      createCurvesBSplineTy createCurvesBSpline = nullptr;
-      SELECT_SYMBOL_DEFAULT_AVX(device->enabled_cpu_features,createCurvesBSpline);
+      SELECT_SYMBOL_DEFAULT_AVX_AVX2_AVX512KNL_AVX512SKX(device->enabled_cpu_features,createLineSegments);
+      createCurvesTy createCurves = nullptr;
+      SELECT_SYMBOL_DEFAULT_AVX_AVX2_AVX512KNL_AVX512SKX(device->enabled_cpu_features,createCurves);
       
       Geometry* geom;
       switch (type) {
-      case RTC_GEOMETRY_TYPE_FLAT_LINEAR_CURVE       : geom = createLineSegments (device); break;
-      case RTC_GEOMETRY_TYPE_ROUND_BEZIER_CURVE : geom = createCurvesBezier (device,ROUND_CURVE); break;
-      case RTC_GEOMETRY_TYPE_FLAT_BEZIER_CURVE  : geom = createCurvesBezier (device,FLAT_CURVE); break;
-      case RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE: geom = createCurvesBSpline(device,ROUND_CURVE); break;
-      case RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE : geom = createCurvesBSpline(device,FLAT_CURVE); break;
+      //case RTC_GEOMETRY_TYPE_ROUND_LINEAR_CURVE            : geom = createLineSegments (device,Geometry::GTY_ROUND_LINEAR_CURVE); break;
+      case RTC_GEOMETRY_TYPE_FLAT_LINEAR_CURVE             : geom = createLineSegments (device,Geometry::GTY_FLAT_LINEAR_CURVE); break;
+      //case RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_LINEAR_CURVE  : geom = createLineSegments (device,Geometry::GTY_ORIENTED_LINEAR_CURVE); break;
+        
+      case RTC_GEOMETRY_TYPE_ROUND_BEZIER_CURVE            : geom = createCurves(device,Geometry::GTY_ROUND_BEZIER_CURVE); break;
+      case RTC_GEOMETRY_TYPE_FLAT_BEZIER_CURVE             : geom = createCurves(device,Geometry::GTY_FLAT_BEZIER_CURVE); break;
+      case RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_BEZIER_CURVE  : geom = createCurves(device,Geometry::GTY_ORIENTED_BEZIER_CURVE); break;
+        
+      case RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE           : geom = createCurves(device,Geometry::GTY_ROUND_BSPLINE_CURVE); break;
+      case RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE            : geom = createCurves(device,Geometry::GTY_FLAT_BSPLINE_CURVE); break;
+      case RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_BSPLINE_CURVE : geom = createCurves(device,Geometry::GTY_ORIENTED_BSPLINE_CURVE); break;
+        
+      case RTC_GEOMETRY_TYPE_ROUND_HERMITE_CURVE           : geom = createCurves(device,Geometry::GTY_ROUND_HERMITE_CURVE); break;
+      case RTC_GEOMETRY_TYPE_FLAT_HERMITE_CURVE            : geom = createCurves(device,Geometry::GTY_FLAT_HERMITE_CURVE); break;
+      case RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_HERMITE_CURVE : geom = createCurves(device,Geometry::GTY_ORIENTED_HERMITE_CURVE); break;
       default:                                    geom = nullptr; break;
       }
       return (RTCGeometry) geom->refInc();
@@ -1063,6 +1055,7 @@ namespace embree
 #if defined(EMBREE_GEOMETRY_SUBDIVISION)
       createSubdivMeshTy createSubdivMesh = nullptr;
       SELECT_SYMBOL_DEFAULT_AVX(device->enabled_cpu_features,createSubdivMesh);
+      //SELECT_SYMBOL_DEFAULT_AVX_AVX2_AVX512KNL_AVX512SKX(device->enabled_cpu_features,createSubdivMesh); // FIXME: this does not work for some reason?
       Geometry* geom = createSubdivMesh(device);
       return (RTCGeometry) geom->refInc();
 #else
@@ -1073,7 +1066,9 @@ namespace embree
     case RTC_GEOMETRY_TYPE_USER:
     {
 #if defined(EMBREE_GEOMETRY_USER)
-      Geometry* geom = new UserGeometry(device,0,1);
+      createUserGeometryTy createUserGeometry = nullptr;
+      SELECT_SYMBOL_DEFAULT_AVX_AVX2_AVX512KNL_AVX512SKX(device->enabled_cpu_features,createUserGeometry);
+      Geometry* geom = createUserGeometry(device);
       return (RTCGeometry) geom->refInc();
 #else
       throw_RTCError(RTC_ERROR_UNKNOWN,"RTC_GEOMETRY_TYPE_USER is not supported");
@@ -1082,11 +1077,25 @@ namespace embree
 
     case RTC_GEOMETRY_TYPE_INSTANCE:
     {
-#if defined(EMBREE_GEOMETRY_USER)
-      Geometry* geom = new Instance(device,nullptr,1);
+#if defined(EMBREE_GEOMETRY_INSTANCE)
+      createInstanceTy createInstance = nullptr;
+      SELECT_SYMBOL_DEFAULT_AVX_AVX2_AVX512KNL_AVX512SKX(device->enabled_cpu_features,createInstance);
+      Geometry* geom = createInstance(device);
       return (RTCGeometry) geom->refInc();
 #else
       throw_RTCError(RTC_ERROR_UNKNOWN,"RTC_GEOMETRY_TYPE_INSTANCE is not supported");
+#endif
+    }
+
+    case RTC_GEOMETRY_TYPE_GRID:
+    {
+#if defined(EMBREE_GEOMETRY_GRID)
+      createGridMeshTy createGridMesh = nullptr;
+      SELECT_SYMBOL_DEFAULT_AVX_AVX2_AVX512KNL_AVX512SKX(device->enabled_cpu_features,createGridMesh);
+      Geometry* geom = createGridMesh(device);
+      return (RTCGeometry) geom->refInc();
+#else
+      throw_RTCError(RTC_ERROR_UNKNOWN,"RTC_GEOMETRY_TYPE_GRID is not supported");
 #endif
     }
     
@@ -1100,12 +1109,12 @@ namespace embree
   
   RTC_API void rtcSetGeometryUserPrimitiveCount(RTCGeometry hgeometry, unsigned int userPrimitiveCount)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryUserPrimitiveCount);
     RTC_VERIFY_HANDLE(hgeometry);
     
-    if (unlikely(geometry->type != Geometry::USER_GEOMETRY))
+    if (unlikely(geometry->getType() != Geometry::GTY_USER_GEOMETRY))
       throw_RTCError(RTC_ERROR_INVALID_OPERATION,"operation only allowed for user geometries"); 
 
     geometry->setNumPrimitives(userPrimitiveCount);
@@ -1114,7 +1123,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryTimeStepCount(RTCGeometry hgeometry, unsigned int timeStepCount)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryTimeStepCount);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1126,9 +1135,23 @@ namespace embree
     RTC_CATCH_END2(geometry);
   }
 
-  RTC_API void rtcSetGeometryVertexAttributeCount(RTCGeometry hgeometry, unsigned int N)
+  RTC_API void rtcSetGeometryTimeRange(RTCGeometry hgeometry, float startTime, float endTime)
   {
     Ref<Geometry> geometry = (Geometry*) hgeometry;
+    RTC_CATCH_BEGIN;
+    RTC_TRACE(rtcSetGeometryTimeRange);
+    RTC_VERIFY_HANDLE(hgeometry);
+
+    if (startTime > endTime)
+      throw_RTCError(RTC_ERROR_INVALID_ARGUMENT,"startTime has to be smaller or equal to the endTime");
+        
+    geometry->setTimeRange(BBox1f(startTime,endTime));
+    RTC_CATCH_END2(geometry);
+  }
+
+  RTC_API void rtcSetGeometryVertexAttributeCount(RTCGeometry hgeometry, unsigned int N)
+  {
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryVertexAttributeCount);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1138,7 +1161,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryTopologyCount(RTCGeometry hgeometry, unsigned int N)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryTopologyCount);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1149,7 +1172,7 @@ namespace embree
   /*! sets the build quality of the geometry */
   RTC_API void rtcSetGeometryBuildQuality (RTCGeometry hgeometry, RTCBuildQuality quality) 
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryBuildQuality);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1164,7 +1187,7 @@ namespace embree
   
   RTC_API void rtcSetGeometryMask (RTCGeometry hgeometry, unsigned int mask) 
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryMask);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1174,7 +1197,7 @@ namespace embree
 
   RTC_API void rtcSetGeometrySubdivisionMode (RTCGeometry hgeometry, unsigned topologyID, RTCSubdivisionMode mode) 
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometrySubdivisionMode);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1184,7 +1207,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryVertexAttributeTopology(RTCGeometry hgeometry, unsigned int vertexAttributeID, unsigned int topologyID)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryVertexAttributeTopology);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1194,7 +1217,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryBuffer(RTCGeometry hgeometry, RTCBufferType type, unsigned int slot, RTCFormat format, RTCBuffer hbuffer, size_t byteOffset, size_t byteStride, size_t itemCount)
   {
-    Ref<Geometry> geometry = (Geometry*)hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     Ref<Buffer> buffer = (Buffer*)hbuffer;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryBuffer);
@@ -1213,7 +1236,7 @@ namespace embree
 
   RTC_API void rtcSetSharedGeometryBuffer(RTCGeometry hgeometry, RTCBufferType type, unsigned int slot, RTCFormat format, const void* ptr, size_t byteOffset, size_t byteStride, size_t itemCount)
   {
-    Ref<Geometry> geometry = (Geometry*)hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetSharedGeometryBuffer);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1228,15 +1251,20 @@ namespace embree
 
   RTC_API void* rtcSetNewGeometryBuffer(RTCGeometry hgeometry, RTCBufferType type, unsigned int slot, RTCFormat format, size_t byteStride, size_t itemCount)
   {
-    Ref<Geometry> geometry = (Geometry*)hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetNewGeometryBuffer);
     RTC_VERIFY_HANDLE(hgeometry);
-    
+
     if (itemCount > 0xFFFFFFFFu)
       throw_RTCError(RTC_ERROR_INVALID_ARGUMENT,"buffer too large");
     
-    Ref<Buffer> buffer = new Buffer(geometry->device, itemCount*byteStride);
+    /* vertex buffers need to get overallocated slightly as elements are accessed using SSE loads */
+    size_t bytes = itemCount*byteStride;
+    if (type == RTC_BUFFER_TYPE_VERTEX || type == RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE)
+      bytes += (byteStride+15)%16 - byteStride;
+      
+    Ref<Buffer> buffer = new Buffer(geometry->device, bytes);
     geometry->setBuffer(type, slot, format, buffer, 0, byteStride, (unsigned int)itemCount);
     return buffer->data();
     RTC_CATCH_END2(geometry);
@@ -1245,7 +1273,7 @@ namespace embree
 
   RTC_API void* rtcGetGeometryBufferData(RTCGeometry hgeometry, RTCBufferType type, unsigned int slot)
   {
-    Ref<Geometry> geometry = (Geometry*)hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcGetGeometryBufferData);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1256,7 +1284,7 @@ namespace embree
   
   RTC_API void rtcEnableGeometry (RTCGeometry hgeometry) 
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcEnableGeometry);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1266,7 +1294,7 @@ namespace embree
 
   RTC_API void rtcUpdateGeometryBuffer (RTCGeometry hgeometry, RTCBufferType type, unsigned int slot) 
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcUpdateGeometryBuffer);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1276,7 +1304,7 @@ namespace embree
 
   RTC_API void rtcDisableGeometry (RTCGeometry hgeometry) 
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcDisableGeometry);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1286,7 +1314,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryTessellationRate (RTCGeometry hgeometry, float tessellationRate)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryTessellationRate);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1296,7 +1324,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryUserData (RTCGeometry hgeometry, void* ptr) 
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryUserData);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1306,7 +1334,7 @@ namespace embree
 
   RTC_API void* rtcGetGeometryUserData (RTCGeometry hgeometry)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry; // no ref counting here!
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcGetGeometryUserData);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1317,7 +1345,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryBoundsFunction (RTCGeometry hgeometry, RTCBoundsFunction bounds, void* userPtr)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryBoundsFunction);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1327,7 +1355,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryDisplacementFunction (RTCGeometry hgeometry, RTCDisplacementFunctionN displacement)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryDisplacementFunction);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1337,7 +1365,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryIntersectFunction (RTCGeometry hgeometry, RTCIntersectFunctionN intersect) 
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryIntersectFunction);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1345,9 +1373,59 @@ namespace embree
     RTC_CATCH_END2(geometry);
   }
 
+  RTC_API unsigned int rtcGetGeometryFirstHalfEdge(RTCGeometry hgeometry, unsigned int faceID)
+  {
+    Geometry* geometry = (Geometry*) hgeometry;
+    RTC_CATCH_BEGIN;
+    RTC_TRACE(rtcGetGeometryFirstHalfEdge);
+    return geometry->getFirstHalfEdge(faceID);
+    RTC_CATCH_END2(geometry);
+    return -1;
+  }
+
+  RTC_API unsigned int rtcGetGeometryFace(RTCGeometry hgeometry, unsigned int edgeID)
+  {
+    Geometry* geometry = (Geometry*) hgeometry;
+    RTC_CATCH_BEGIN;
+    RTC_TRACE(rtcGetGeometryFace);
+    return geometry->getFace(edgeID);
+    RTC_CATCH_END2(geometry);
+    return -1;
+  }
+
+  RTC_API unsigned int rtcGetGeometryNextHalfEdge(RTCGeometry hgeometry, unsigned int edgeID)
+  {
+    Geometry* geometry = (Geometry*) hgeometry;
+    RTC_CATCH_BEGIN;
+    RTC_TRACE(rtcGetGeometryNextHalfEdge);
+    return geometry->getNextHalfEdge(edgeID);
+    RTC_CATCH_END2(geometry);
+    return -1;
+  }
+
+  RTC_API unsigned int rtcGetGeometryPreviousHalfEdge(RTCGeometry hgeometry, unsigned int edgeID)
+  {
+    Geometry* geometry = (Geometry*) hgeometry;
+    RTC_CATCH_BEGIN;
+    RTC_TRACE(rtcGetGeometryPreviousHalfEdge);
+    return geometry->getPreviousHalfEdge(edgeID);
+    RTC_CATCH_END2(geometry);
+    return -1;
+  }
+
+  RTC_API unsigned int rtcGetGeometryOppositeHalfEdge(RTCGeometry hgeometry, unsigned int topologyID, unsigned int edgeID)
+  {
+    Geometry* geometry = (Geometry*) hgeometry;
+    RTC_CATCH_BEGIN;
+    RTC_TRACE(rtcGetGeometryOppositeHalfEdge);
+    return geometry->getOppositeHalfEdge(topologyID,edgeID);
+    RTC_CATCH_END2(geometry);
+    return -1;
+  }
+
   RTC_API void rtcSetGeometryOccludedFunction (RTCGeometry hgeometry, RTCOccludedFunctionN occluded) 
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetOccludedFunctionN);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1357,7 +1435,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryIntersectFilterFunction (RTCGeometry hgeometry, RTCFilterFunctionN filter) 
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryIntersectFilterFunction);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1367,7 +1445,7 @@ namespace embree
 
   RTC_API void rtcSetGeometryOccludedFilterFunction (RTCGeometry hgeometry, RTCFilterFunctionN filter) 
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcSetGeometryOccludedFilterFunction);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1412,7 +1490,7 @@ namespace embree
   RTC_API unsigned int rtcAttachGeometry (RTCScene hscene, RTCGeometry hgeometry)
   {
     Scene* scene = (Scene*) hscene;
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcAttachGeometry);
     RTC_VERIFY_HANDLE(hscene);
@@ -1427,7 +1505,7 @@ namespace embree
   RTC_API void rtcAttachGeometryByID (RTCScene hscene, RTCGeometry hgeometry, unsigned int geomID)
   {
     Scene* scene = (Scene*) hscene;
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcAttachGeometryByID);
     RTC_VERIFY_HANDLE(hscene);
@@ -1435,8 +1513,7 @@ namespace embree
     RTC_VERIFY_GEOMID(geomID);
     if (scene->device != geometry->device)
       throw_RTCError(RTC_ERROR_INVALID_ARGUMENT,"inputs are from different devices");
-    unsigned int gID = scene->bind(geomID,geometry);
-    assert(gID == geomID);
+    scene->bind(geomID,geometry);
     RTC_CATCH_END2(scene);
   }
   
@@ -1453,7 +1530,7 @@ namespace embree
 
   RTC_API void rtcRetainGeometry (RTCGeometry hgeometry)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcRetainGeometry);
     RTC_VERIFY_HANDLE(hgeometry);
@@ -1463,7 +1540,7 @@ namespace embree
   
   RTC_API void rtcReleaseGeometry (RTCGeometry hgeometry)
   {
-    Ref<Geometry> geometry = (Geometry*) hgeometry;
+    Geometry* geometry = (Geometry*) hgeometry;
     RTC_CATCH_BEGIN;
     RTC_TRACE(rtcReleaseGeometry);
     RTC_VERIFY_HANDLE(hgeometry);

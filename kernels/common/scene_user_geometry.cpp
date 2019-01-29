@@ -19,14 +19,21 @@
 
 namespace embree
 {
-  UserGeometry::UserGeometry (Device* device, unsigned int items, unsigned int numTimeSteps) 
-    : AccelSet(device,items,numTimeSteps) {}
-  
-  void UserGeometry::setUserData (void* ptr) {
-    intersectors.ptr = ptr;
-    Geometry::setUserData(ptr);
-  }
+#if defined(EMBREE_LOWEST_ISA)
 
+  UserGeometry::UserGeometry (Device* device, unsigned int items, unsigned int numTimeSteps) 
+    : AccelSet(device,Geometry::GTY_USER_GEOMETRY,items,numTimeSteps) {}
+
+  void UserGeometry::enabling () {
+    if (numTimeSteps == 1) scene->world.numUserGeometries += numPrimitives;
+    else                   scene->worldMB.numUserGeometries += numPrimitives;
+  }
+  
+  void UserGeometry::disabling() { 
+    if (numTimeSteps == 1) scene->world.numUserGeometries -= numPrimitives;
+    else                   scene->worldMB.numUserGeometries -= numPrimitives;
+  }
+  
   void UserGeometry::setMask (unsigned mask) 
   {
     this->mask = mask; 
@@ -38,10 +45,19 @@ namespace embree
   }
 
   void UserGeometry::setIntersectFunctionN (RTCIntersectFunctionN intersect) {
-    intersectors.intersectorN.intersect = intersect;
+    intersectorN.intersect = intersect;
   }
 
   void UserGeometry::setOccludedFunctionN (RTCOccludedFunctionN occluded) {
-    intersectors.intersectorN.occluded = occluded;
+    intersectorN.occluded = occluded;
+  }
+  
+#endif
+
+  namespace isa
+  {
+    UserGeometry* createUserGeometry(Device* device) {
+      return new UserGeometryISA(device);
+    }
   }
 }

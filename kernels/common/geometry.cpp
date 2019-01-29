@@ -19,11 +19,46 @@
 
 namespace embree
 {
-  Geometry::Geometry (Device* device, Type type, unsigned int numPrimitives, unsigned int numTimeSteps) 
-    : device(device), scene(nullptr), geomID(0), type(type), 
-      numPrimitives(numPrimitives), numPrimitivesChanged(false),
-      numTimeSteps(unsigned(numTimeSteps)), fnumTimeSegments(float(numTimeSteps-1)), quality(RTC_BUILD_QUALITY_MEDIUM),
-      enabled(true), state(MODIFIED), userPtr(nullptr), mask(-1), used(1),
+  const char* Geometry::gtype_names[Geometry::GTY_END] =
+  {
+    "flat_linear_curve",
+    "round_linear_curve",
+    "oriented_linear_curve",
+    "",
+    "flat_bezier_curve",
+    "round_bezier_curve",
+    "oriented_bezier_curve",
+    "",
+    "flat_bspline_curve",
+    "round_bspline_curve",
+    "oriented_bspline_curve",
+    "",
+    "flat_hermite_curve",
+    "round_hermite_curve",
+    "oriented_hermite_curve",
+    "",
+    "triangles",
+    "quads",
+    "grid",
+    "subdivs",
+    "",
+    "sphere",
+    "disc",
+    "oriented_disc",
+    "",
+    "usergeom",
+    "instance",
+  };
+     
+  Geometry::Geometry (Device* device, GType gtype, unsigned int numPrimitives, unsigned int numTimeSteps) 
+    : device(device), scene(nullptr), userPtr(nullptr),
+      geomID(0), numPrimitives(numPrimitives), numTimeSteps(unsigned(numTimeSteps)), fnumTimeSegments(float(numTimeSteps-1)), time_range(0.0f,1.0f),
+      mask(-1),
+      gtype(gtype),
+      quality(RTC_BUILD_QUALITY_MEDIUM),
+      state(MODIFIED),
+      numPrimitivesChanged(false),
+      enabled(true),
       intersectionFilterN(nullptr), occlusionFilterN(nullptr)
   {
     device->refInc();
@@ -56,6 +91,12 @@ namespace embree
     fnumTimeSegments = float(numTimeSteps_in-1);
     if (isEnabled() && scene) enabling();
     
+    Geometry::update();
+  }
+
+  void Geometry::setTimeRange (const BBox1f range)
+  {
+    time_range = range;
     Geometry::update();
   }
   
@@ -136,7 +177,6 @@ namespace embree
       enabling();
     }
 
-    used++;
     enabled = true;
   }
 
@@ -151,7 +191,6 @@ namespace embree
       disabling();
     }
     
-    used--;
     enabled = false;
   }
 
@@ -161,8 +200,8 @@ namespace embree
   }
   
   void Geometry::setIntersectionFilterFunctionN (RTCFilterFunctionN filter) 
-  { 
-    if (type != TRIANGLE_MESH && type != QUAD_MESH && type != LINE_SEGMENTS && type != BEZIER_CURVES && type != SUBDIV_MESH && type != USER_GEOMETRY)
+  {
+    if (!(getTypeMask() & (MTY_TRIANGLE_MESH | MTY_QUAD_MESH | MTY_CURVES | MTY_SUBDIV_MESH | MTY_USER_GEOMETRY | MTY_GRID_MESH)))
       throw_RTCError(RTC_ERROR_INVALID_OPERATION,"filter functions not supported for this geometry"); 
 
     if (scene && isEnabled()) {
@@ -173,8 +212,8 @@ namespace embree
   }
 
   void Geometry::setOcclusionFilterFunctionN (RTCFilterFunctionN filter) 
-  { 
-    if (type != TRIANGLE_MESH && type != QUAD_MESH && type != LINE_SEGMENTS && type != BEZIER_CURVES && type != SUBDIV_MESH && type != USER_GEOMETRY) 
+  {
+    if (!(getTypeMask() & (MTY_TRIANGLE_MESH | MTY_QUAD_MESH | MTY_CURVES | MTY_SUBDIV_MESH | MTY_USER_GEOMETRY | MTY_GRID_MESH)))
       throw_RTCError(RTC_ERROR_INVALID_OPERATION,"filter functions not supported for this geometry"); 
 
     if (scene && isEnabled()) {

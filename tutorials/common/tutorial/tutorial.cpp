@@ -18,22 +18,16 @@
 #include "scene.h"
 #include "statistics.h"
 
-/* include GLUT for display */
+/* include GL */
 #if defined(__MACOSX__)
 #  include <OpenGL/gl.h>
-#  include <GLUT/glut.h>
 #elif defined(__WIN32__)
 #  include <windows.h>
-#  define FREEGLUT_LIB_PRAGMAS 0
 #  include <GL/gl.h>
-#  include <GL/glut.h>
 #else
 #  include <GL/gl.h>
-#  include <GL/glut.h>
 #endif
 
-/* include tutorial_device.h after GLUT, as otherwise we may get
- * warnings of redefined GLUT_KEY_F1, etc. */
 #include "tutorial_device.h"
 #include "../scenegraph/scenegraph.h"
 #include "../scenegraph/geometry_creation.h"
@@ -45,6 +39,8 @@ namespace embree
 {
   extern "C"
   {
+    RTCDevice g_device = nullptr;
+    
     float g_debug = 0.0f;
     Mode g_mode = MODE_NORMAL;
     ISPCScene* g_ispc_scene = nullptr;
@@ -66,7 +62,7 @@ namespace embree
   extern "C" int g_instancing_mode;
 
   /* error reporting function */
-  extern "C" void tutorial_error_handler(void* userPtr, const RTCError code, const char* str)
+  void error_handler(void* userPtr, const RTCError code, const char* str)
   {
     if (code == RTC_ERROR_NONE)
       return;
@@ -112,14 +108,14 @@ namespace embree
 
       window_width(512),
       window_height(512),
-      windowID(0),
+      window(nullptr),
 
       time0(getSeconds()),
       debug_int0(0),
       debug_int1(0),
 
       mouseMode(0),
-      clickX(0), clickY(0),
+      clickX(0.0), clickY(0.0),
       speed(1.0f),
       moveDelta(zero),
       command_line_camera(false),
@@ -295,6 +291,7 @@ namespace embree
     g_ispc_scene = nullptr;
     ispc_scene = nullptr;
     device_cleanup();
+    if (g_device) rtcReleaseDevice(g_device);
     alignedFree(pixels);
     pixels = nullptr;
     width = 0;
@@ -307,12 +304,9 @@ namespace embree
 
     : TutorialApplication(tutorialName, features),
       scene(new SceneGraph::GroupNode),
-      convert_tris_to_quads(false),
       convert_tris_to_quads_prop(inf),
-      convert_bezier_to_lines(false),
-      convert_hair_to_curves(false),
-      convert_bezier_to_bspline(false),
-      convert_bspline_to_bezier(false),
+      grid_resX(2),
+      grid_resY(2),
       remove_mblur(false),
       remove_non_mblur(false),
       sceneFilename(""),
@@ -344,31 +338,77 @@ namespace embree
       }, "-animlist <filename>: parses a sequence of .obj/.xml files listed in <filename> and adds them to the scene");
 
     registerOption("convert-triangles-to-quads", [this] (Ref<ParseStream> cin, const FileName& path) {
-        convert_tris_to_quads = true;
+        sgop.push_back(CONVERT_TRIANGLES_TO_QUADS);
         convert_tris_to_quads_prop = inf;
       }, "--convert-triangles-to-quads: converts all triangles to quads when loading");
 
     registerOption("convert-triangles-to-triangles-and-quads", [this] (Ref<ParseStream> cin, const FileName& path) {
-        convert_tris_to_quads = true;
+        sgop.push_back(CONVERT_TRIANGLES_TO_QUADS);
         convert_tris_to_quads_prop = 0.5f;
       }, "--convert-triangles-to-triangles-and-quads: converts to mixed triangle/quad scene");
 
     registerOption("convert-bezier-to-lines", [this] (Ref<ParseStream> cin, const FileName& path) {
-        convert_bezier_to_lines = true;
+        sgop.push_back(CONVERT_BEZIER_TO_LINES);
       }, "--convert-bezier-to-lines: converts all bezier curves to line segments when loading");
 
-    registerOption("convert-hair-to-curves", [this] (Ref<ParseStream> cin, const FileName& path) {
-        convert_hair_to_curves = true;
-      }, "--convert-hair-to-curves: converts all hair geometry to curves when loading");
+    registerOption("convert-flat-to-round-curves", [this] (Ref<ParseStream> cin, const FileName& path) {
+        sgop.push_back(CONVERT_FLAT_TO_ROUND_CURVES);
+      }, "--convert-flat-to-round-curves: converts all flat curves to round curves");
+    registerOptionAlias("convert-flat-to-round-curves","convert-hair-to-curves"); // for compatibility reasons
 
+    registerOption("convert-round-to-flat-curves", [this] (Ref<ParseStream> cin, const FileName& path) {
+        sgop.push_back(CONVERT_ROUND_TO_FLAT_CURVES);
+      }, "--convert-round-to-flat-curves: converts all round curves to flat curves");
+    
     registerOption("convert-bezier-to-bspline", [this] (Ref<ParseStream> cin, const FileName& path) {
-        convert_bezier_to_bspline = true;
+        sgop.push_back(CONVERT_BEZIER_TO_BSPLINE);
       }, "--convert-bezier-to-bspline: converts all bezier curves to bsplines curves");
 
     registerOption("convert-bspline-to-bezier", [this] (Ref<ParseStream> cin, const FileName& path) {
-        convert_bspline_to_bezier = true;
+        sgop.push_back(CONVERT_BSPLINE_TO_BEZIER);
       }, "--convert-bspline-to-bezier: converts all bsplines curves to bezier curves");
 
+    registerOption("convert-bezier-to-hermite", [this] (Ref<ParseStream> cin, const FileName& path) {
+        sgop.push_back(CONVERT_BEZIER_TO_HERMITE);
+      }, "--convert-bezier-to-hermite: converts all bezier curves to hermite curves");
+
+    registerOption("merge-triangles-to-grids", [this] (Ref<ParseStream> cin, const FileName& path) {
+        sgop.push_back(CONVERT_TRIANGLES_TO_QUADS);
+        sgop.push_back(MERGE_QUADS_TO_GRIDS);
+      }, "--merge-triangles-to-grids: merges quads to grids");
+    
+    registerOption("merge-quads-to-grids", [this] (Ref<ParseStream> cin, const FileName& path) {
+        sgop.push_back(MERGE_QUADS_TO_GRIDS);
+      }, "--merge-quads-to-grids: merges quads to grids");
+
+    registerOption("convert-quads-to-grids", [this] (Ref<ParseStream> cin, const FileName& path) {
+        sgop.push_back(CONVERT_QUADS_TO_GRIDS);
+      }, "--convert-quads-to-grids: converts all quads to grids");
+
+    registerOption("convert-grids-to-quads", [this] (Ref<ParseStream> cin, const FileName& path) {
+        sgop.push_back(CONVERT_GRIDS_TO_QUADS);
+      }, "--convert-grids-to-quads: converts all grids to quads");
+
+    registerOption("convert-triangles-to-grids", [this] (Ref<ParseStream> cin, const FileName& path) {
+        sgop.push_back(CONVERT_TRIANGLES_TO_QUADS);
+        sgop.push_back(CONVERT_QUADS_TO_GRIDS);
+      }, "--convert-triangles-to-grids: converts all triangles to grids");
+
+    registerOption("convert-triangles-to-grids-to-quads", [this] (Ref<ParseStream> cin, const FileName& path) {
+        sgop.push_back(CONVERT_TRIANGLES_TO_QUADS);
+        sgop.push_back(CONVERT_QUADS_TO_GRIDS);
+        sgop.push_back(CONVERT_GRIDS_TO_QUADS);
+      }, "--convert-triangles-to-grids-to-quads: converts all triangles to grids and then to quads");
+
+    registerOption("grid-res", [this] (Ref<ParseStream> cin, const FileName& path) {
+        grid_resX = min(max(cin->getInt(),2),0x7fff);
+        grid_resY = min(max(cin->getInt(),2),0x7fff);        
+      }, "--grid-res: sets tessellation resolution for the grid primitive");
+
+    registerOption("convert-mblur-to-nonmblur", [this] (Ref<ParseStream> cin, const FileName& path) {
+         sgop.push_back(CONVERT_MBLUR_TO_NONMBLUR);
+      }, "--convert-mblur-to-nonmblur: converts all motion blur geometry to non-motion blur geometry");
+    
     registerOption("remove-mblur", [this] (Ref<ParseStream> cin, const FileName& path) {
          remove_mblur = true;
       }, "--remove-mblur: removes all motion blur geometry");
@@ -380,18 +420,18 @@ namespace embree
     registerOption("instancing", [this] (Ref<ParseStream> cin, const FileName& path) {
         std::string mode = cin->getString();
         if      (mode == "none"    ) instancing_mode = SceneGraph::INSTANCING_NONE;
+        else if (mode == "scene_geometry") instancing_mode = SceneGraph::INSTANCING_GEOMETRY; // for compatibility
+        else if (mode == "scene_group"   ) instancing_mode = SceneGraph::INSTANCING_GROUP; // for compatibility
         else if (mode == "geometry") instancing_mode = SceneGraph::INSTANCING_GEOMETRY;
-        else if (mode == "geometry_group") instancing_mode = SceneGraph::INSTANCING_GEOMETRY_GROUP;
-        else if (mode == "scene_geometry") instancing_mode = SceneGraph::INSTANCING_SCENE_GEOMETRY;
-        else if (mode == "scene_group"   ) instancing_mode = SceneGraph::INSTANCING_SCENE_GROUP;
+        else if (mode == "group"   ) instancing_mode = SceneGraph::INSTANCING_GROUP;
+        else if (mode == "flattened") instancing_mode = SceneGraph::INSTANCING_FLATTENED;
         else throw std::runtime_error("unknown instancing mode: "+mode);
         g_instancing_mode = instancing_mode;
       }, "--instancing: set instancing mode\n"
       "  none: no instancing\n"
-      "  geometry: instance individual geometries\n"
-      "  geometry_group: instance geometry groups\n"
-      "  scene_geometry: instance individual geometries as scenes\n"
-      "  scene_group: instance geometry groups as scenes");
+      "  geometry: instance individual geometries as scenes\n"
+      "  group: instance geometry groups as scenes\n"
+      "  flattened: assume flattened scene graph");
 
     registerOption("ambientlight", [this] (Ref<ParseStream> cin, const FileName& path) {
         const Vec3fa L = cin->getVec3fa();
@@ -437,6 +477,15 @@ namespace embree
         scene->add(SceneGraph::createQuadPlane(p0,dx,dy,width,height,new OBJMaterial));
       }, "--quad-plane p.x p.y p.z dx.x dx.y dx.z dy.x dy.y dy.z width height: adds a plane build of quadrilaterals originated at p0 and spanned by the vectors dx and dy with a tesselation width/height.");
 
+    registerOption("grid-plane", [this] (Ref<ParseStream> cin, const FileName& path) {
+        const Vec3fa p0 = cin->getVec3fa();
+        const Vec3fa dx = cin->getVec3fa();
+        const Vec3fa dy = cin->getVec3fa();
+        const size_t width = cin->getInt();
+        const size_t height = cin->getInt();
+        scene->add(SceneGraph::createGridPlane(p0,dx,dy,width,height,new OBJMaterial));
+      }, "--grid-plane p.x p.y p.z dx.x dx.y dx.z dy.x dy.y dy.z width height: adds a plane using a grid mesh build. The plane is originated at p0 and spanned by the vectors dx and dy with a tesselation width/height.");
+
     registerOption("subdiv-plane", [this] (Ref<ParseStream> cin, const FileName& path) {
         const Vec3fa p0 = cin->getVec3fa();
         const Vec3fa dx = cin->getVec3fa();
@@ -481,6 +530,13 @@ namespace embree
         scene->add(SceneGraph::createQuadSphere(p,r,numPhi,new OBJMaterial));
       }, "--quad-sphere p.x p.y p.z r numPhi: adds a sphere at position p with radius r and tesselation numPhi build of quadrilaterals.");
 
+    registerOption("grid-sphere", [this] (Ref<ParseStream> cin, const FileName& path) {
+        const Vec3fa p = cin->getVec3fa();
+        const float  r = cin->getFloat();
+        const size_t N = cin->getInt();
+        scene->add(SceneGraph::createGridSphere(p,r,N,new OBJMaterial));
+      }, "--grid-sphere p.x p.y p.z r N: adds a grid sphere at position p with radius r using a cube topology and N*N quads at each face.");
+
     registerOption("quad-sphere-mblur", [this] (Ref<ParseStream> cin, const FileName& path) {
         const Vec3fa p = cin->getVec3fa();
         const Vec3fa dp = cin->getVec3fa();
@@ -499,15 +555,29 @@ namespace embree
         scene->add(SceneGraph::createSubdivSphere(p,r,numPhi,tessellationRate,new OBJMaterial));
       }, "--subdiv-sphere p.x p.y p.z r numPhi: adds a sphere at position p with radius r build of Catmull Clark subdivision surfaces. The sphere consists of numPhi x numPhi many patches and each path has the specified tessellation rate.");
 
-    registerOption("cache", [this] (Ref<ParseStream> cin, const FileName& path) {
-        subdiv_mode = ",subdiv_accel=bvh4.subdivpatch1cached";
-        rtcore += subdiv_mode;
-      }, "--cache: enabled cached subdiv mode");
+    registerOption("point-sphere", [this] (Ref<ParseStream> cin, const FileName& path) {
+        const Vec3fa p = cin->getVec3fa();
+        const float  r = cin->getFloat();
+        const float pointR = cin->getFloat();
+        const size_t numPhi = cin->getInt();
+        scene->add(SceneGraph::createPointSphere(p, r, pointR, numPhi, SceneGraph::SPHERE, new OBJMaterial));
+      }, "--point-sphere p.x p.y p.z r pointR numPhi: adds a sphere at position p with radius r and tesselation numPhi build of spheres.");
 
-    registerOption("pregenerate", [this] (Ref<ParseStream> cin, const FileName& path) {
-        subdiv_mode = ",subdiv_accel=bvh4.grid.eager";
-        rtcore += subdiv_mode;
-      }, "--pregenerate: enabled pregenerate subdiv mode");
+    registerOption("disc-sphere", [this] (Ref<ParseStream> cin, const FileName& path) {
+        const Vec3fa p = cin->getVec3fa();
+        const float  r = cin->getFloat();
+        const float pointR = cin->getFloat();
+        const size_t numPhi = cin->getInt();
+        scene->add(SceneGraph::createPointSphere(p, r, pointR, numPhi, SceneGraph::DISC, new OBJMaterial));
+      }, "--disc-sphere p.x p.y p.z r pointR numPhi: adds a sphere at position p with radius r and tesselation numPhi build of discs.");
+
+    registerOption("oriented-disc-sphere", [this] (Ref<ParseStream> cin, const FileName& path) {
+        const Vec3fa p = cin->getVec3fa();
+        const float  r = cin->getFloat();
+        const float pointR = cin->getFloat();
+        const size_t numPhi = cin->getInt();
+        scene->add(SceneGraph::createPointSphere(p, r, pointR, numPhi, SceneGraph::ORIENTED_DISC, new OBJMaterial));
+      }, "--oriented-disc-sphere p.x p.y p.z r pointR numPhi: adds a sphere at position p with radius r and tesselation numPhi build of oriented discs.");
 
     registerOption("print-cameras", [this] (Ref<ParseStream> cin, const FileName& path) {
         print_scene_cameras = true;
@@ -521,7 +591,7 @@ namespace embree
   void TutorialApplication::initRayStats()
   {
     if (!g_stats)
-      g_stats = (RayStats*)alignedMalloc(TaskScheduler::threadCount() * sizeof(RayStats), sizeof(RayStats));
+      g_stats = (RayStats*)alignedMalloc(TaskScheduler::threadCount() * sizeof(RayStats), 64);
 
     for (size_t i = 0; i < TaskScheduler::threadCount(); i++)
       g_stats[i].numRays = 0;
@@ -618,6 +688,7 @@ namespace embree
   }
 
   void TutorialApplication::set_parameter(size_t parm, ssize_t val) {
+    rtcSetDeviceProperty(nullptr,(RTCDeviceProperty)parm,val);
   }
 
   void TutorialApplication::resize(unsigned width, unsigned height)
@@ -637,94 +708,151 @@ namespace embree
     g_ispc_scene = ispc_scene.get();
   }
 
-  void TutorialApplication::keyboardFunc(unsigned char key, int x, int y)
-  {
-    /* call tutorial keyboard handler */
-    device_key_pressed(key);
-
-    switch (key)
-    {
-    case 'w' : moveDelta.z = +1.0f; break;
-    case 's' : moveDelta.z = -1.0f; break;
-    case 'a' : moveDelta.x = -1.0f; break;
-    case 'd' : moveDelta.x = +1.0f; break;
-
-    case 'f' :
-      if (fullscreen) {
-        fullscreen = false;
-        glutReshapeWindow(window_width,window_height);
-      } else {
-        fullscreen = true;
-        window_width = width;
-        window_height = height;
-        glutFullScreen();
-      }
-      break;
-    case 'c' : std::cout << camera.str() << std::endl; break;
-    case '+' : g_debug=clamp(g_debug+0.01f); PRINT(g_debug); break;
-    case '-' : g_debug=clamp(g_debug-0.01f); PRINT(g_debug); break;
-
-    case ' ' : {
-      Ref<Image> image = new Image4uc(width, height, (Col4uc*)pixels, true, "", true);
-      storeImage(image, "screenshot.tga");
-      break;
-    }
-
-    case '\033': case 'q': case 'Q':
-      glutDestroyWindow(windowID);
-#if defined(__MACOSX__) // FIXME: why only on MacOSX
-      exit(1);
-#endif
-      break;
-    }
+  void errorFunc(int error, const char* description) {
+    throw std::runtime_error(std::string("Error: ")+description);
+  }
+  void keyboardFunc(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    TutorialApplication::instance->keyboardFunc(window,key,scancode,action,mods);
+  }
+  void clickFunc(GLFWwindow* window, int button, int action, int mods) {
+    TutorialApplication::instance->clickFunc(window,button,action,mods);
+  }
+  void motionFunc(GLFWwindow* window, double x, double y) {
+    TutorialApplication::instance->motionFunc(window,x,y);
+  }
+  void displayFunc() {
+    TutorialApplication::instance->displayFunc();
+  }
+  void reshapeFunc(GLFWwindow* window, int width, int height) {
+    TutorialApplication::instance->reshapeFunc(window,width,height);
   }
 
-  void TutorialApplication::keyboardUpFunc(unsigned char key, int x, int y)
+  GLFWwindow* TutorialApplication::createFullScreenWindow()
   {
-    switch (key)
-    {
-    case 'w' : moveDelta.z = 0.0f; break;
-    case 's' : moveDelta.z = 0.0f; break;
-    case 'a' : moveDelta.x = 0.0f; break;
-    case 'd' : moveDelta.x = 0.0f; break;
-    }
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+    glfwWindowHint(GLFW_RED_BITS,mode->redBits);
+    glfwWindowHint(GLFW_GREEN_BITS,mode->greenBits);
+    glfwWindowHint(GLFW_BLUE_BITS,mode->blueBits);
+    glfwWindowHint(GLFW_REFRESH_RATE,mode->refreshRate);
+    GLFWwindow* window = glfwCreateWindow(mode->width,mode->height,tutorialName.c_str(),monitor,nullptr);
+    glfwSetKeyCallback(window,embree::keyboardFunc);
+    glfwSetCursorPosCallback(window,embree::motionFunc);
+    glfwSetMouseButtonCallback(window,embree::clickFunc);
+    glfwSetCharCallback(window, ImGui_ImplGlfw_CharCallback);
+    glfwSetScrollCallback(window, ImGui_ImplGlfw_ScrollCallback);
+    glfwSetWindowSizeCallback(window,embree::reshapeFunc);
+    resize(mode->width,mode->height);
+    return window;
   }
 
-  void TutorialApplication::specialFunc(int key, int x, int y)
+  GLFWwindow* TutorialApplication::createStandardWindow(int width, int height)
   {
-    device_key_pressed(key);
+    GLFWwindow* window = glfwCreateWindow(width,height,tutorialName.c_str(),nullptr,nullptr);
+    glfwSetKeyCallback(window,embree::keyboardFunc);
+    glfwSetCursorPosCallback(window,embree::motionFunc);
+    glfwSetMouseButtonCallback(window,embree::clickFunc);
+    glfwSetCharCallback(window, ImGui_ImplGlfw_CharCallback);
+    glfwSetScrollCallback(window, ImGui_ImplGlfw_ScrollCallback);
+    glfwSetWindowSizeCallback(window,embree::reshapeFunc);
+    resize(width,height);
+    return window;
+  }
 
-    if (glutGetModifiers() == GLUT_ACTIVE_CTRL)
+  void TutorialApplication::keyboardFunc(GLFWwindow* window_in, int key, int scancode, int action, int mods)
+  {
+    ImGui_ImplGlfw_KeyCallback(window_in,key,scancode,action,mods);
+    if (ImGui::GetIO().WantCaptureKeyboard) return;
+      
+    if (action == GLFW_PRESS)
     {
-      switch (key) {
-      case GLUT_KEY_UP        : debug_int0++; set_parameter(1000000,debug_int0); PRINT(debug_int0); break;
-      case GLUT_KEY_DOWN      : debug_int0--; set_parameter(1000000,debug_int0); PRINT(debug_int0); break;
-      case GLUT_KEY_LEFT      : debug_int1--; set_parameter(1000001,debug_int1); PRINT(debug_int1); break;
-      case GLUT_KEY_RIGHT     : debug_int1++; set_parameter(1000001,debug_int1); PRINT(debug_int1); break;
+      /* call tutorial keyboard handler */
+      device_key_pressed(key);
+
+      if (mods & GLFW_MOD_CONTROL)
+      {
+        switch (key) {
+        case GLFW_KEY_UP        : debug_int0++; set_parameter(1000000,debug_int0); PRINT(debug_int0); break;
+        case GLFW_KEY_DOWN      : debug_int0--; set_parameter(1000000,debug_int0); PRINT(debug_int0); break;
+        case GLFW_KEY_LEFT      : debug_int1--; set_parameter(1000001,debug_int1); PRINT(debug_int1); break;
+        case GLFW_KEY_RIGHT     : debug_int1++; set_parameter(1000001,debug_int1); PRINT(debug_int1); break;
+        }
+      }
+      else
+      {
+        switch (key) {
+        case GLFW_KEY_LEFT      : camera.rotate(-0.02f,0.0f); break;
+        case GLFW_KEY_RIGHT     : camera.rotate(+0.02f,0.0f); break;
+        case GLFW_KEY_UP        : camera.move(0.0f,0.0f,+speed); break;
+        case GLFW_KEY_DOWN      : camera.move(0.0f,0.0f,-speed); break;
+        case GLFW_KEY_PAGE_UP   : speed *= 1.2f; break;
+        case GLFW_KEY_PAGE_DOWN : speed /= 1.2f; break;
+
+        case GLFW_KEY_W : moveDelta.z = +1.0f; break;
+        case GLFW_KEY_S : moveDelta.z = -1.0f; break;
+        case GLFW_KEY_A : moveDelta.x = -1.0f; break;
+        case GLFW_KEY_D : moveDelta.x = +1.0f; break;
+          
+        case GLFW_KEY_F :
+          glfwDestroyWindow(window);
+          if (fullscreen) {
+            width = window_width;
+            height = window_height;
+            window = createStandardWindow(width,height);
+          }
+          else {
+            window_width = width;
+            window_height = height;
+            window = createFullScreenWindow();
+          }
+          glfwMakeContextCurrent(window);
+          fullscreen = !fullscreen;
+          break;
+          
+        case GLFW_KEY_C : std::cout << camera.str() << std::endl; break;
+        case GLFW_KEY_HOME: g_debug=clamp(g_debug+0.01f); PRINT(g_debug); break;
+        case GLFW_KEY_END : g_debug=clamp(g_debug-0.01f); PRINT(g_debug); break;
+          
+        case GLFW_KEY_SPACE: {
+          Ref<Image> image = new Image4uc(width, height, (Col4uc*)pixels, true, "", true);
+          storeImage(image, "screenshot.tga");
+          break;
+        }
+          
+        case GLFW_KEY_ESCAPE:
+        case GLFW_KEY_Q: 
+          glfwSetWindowShouldClose(window,1);
+          break;
+        }
       }
     }
-    else
+    else if (action == GLFW_RELEASE)
     {
-      switch (key) {
-      case GLUT_KEY_LEFT      : camera.rotate(-0.02f,0.0f); break;
-      case GLUT_KEY_RIGHT     : camera.rotate(+0.02f,0.0f); break;
-      case GLUT_KEY_UP        : camera.move(0.0f,0.0f,+speed); break;
-      case GLUT_KEY_DOWN      : camera.move(0.0f,0.0f,-speed); break;
-      case GLUT_KEY_PAGE_UP   : speed *= 1.2f; break;
-      case GLUT_KEY_PAGE_DOWN : speed /= 1.2f; break;
+      switch (key)
+      {
+      case GLFW_KEY_W : moveDelta.z = 0.0f; break;
+      case GLFW_KEY_S : moveDelta.z = 0.0f; break;
+      case GLFW_KEY_A : moveDelta.x = 0.0f; break;
+      case GLFW_KEY_D : moveDelta.x = 0.0f; break;
       }
     }
   }
-
-  void TutorialApplication::clickFunc(int button, int state, int x, int y)
+    
+  void TutorialApplication::clickFunc(GLFWwindow* window, int button, int action, int mods)
   {
-    if (state == GLUT_UP)
+    ImGui_ImplGlfw_MouseButtonCallback(window,button,action,mods);
+    if (ImGui::GetIO().WantCaptureMouse) return;
+  
+    double x,y;
+    glfwGetCursorPos(window,&x,&y);
+    
+    if (action == GLFW_RELEASE)
     {
       mouseMode = 0;
     }
-    else
+    else if (action == GLFW_PRESS)
     {
-      if (button == GLUT_RIGHT_BUTTON)
+      if (button == GLFW_MOUSE_BUTTON_RIGHT)
       {
         ISPCCamera ispccamera = camera.getISPCCamera(width,height);
         Vec3fa p; bool hit = device_pick(float(x),float(y),ispccamera,p);
@@ -740,16 +868,17 @@ namespace embree
       else
       {
         clickX = x; clickY = y;
-        int modifiers = glutGetModifiers();
-        if      (button == GLUT_LEFT_BUTTON && modifiers == GLUT_ACTIVE_SHIFT) mouseMode = 1;
-        else if (button == GLUT_LEFT_BUTTON && modifiers == GLUT_ACTIVE_CTRL ) mouseMode = 3;
-        else if (button == GLUT_LEFT_BUTTON) mouseMode = 4;
+        if      (button == GLFW_MOUSE_BUTTON_LEFT && mods == GLFW_MOD_SHIFT) mouseMode = 1;
+        else if (button == GLFW_MOUSE_BUTTON_LEFT && mods == GLFW_MOD_CONTROL ) mouseMode = 3;
+        else if (button == GLFW_MOUSE_BUTTON_LEFT) mouseMode = 4;
       }
     }
   }
 
-  void TutorialApplication::motionFunc(int x, int y)
+  void TutorialApplication::motionFunc(GLFWwindow* window, double x, double y)
   {
+    if (ImGui::GetIO().WantCaptureMouse) return;
+  
     float dClickX = float(clickX - x), dClickY = float(clickY - y);
     clickX = x; clickY = y;
 
@@ -781,46 +910,48 @@ namespace embree
     /* draw pixels to screen */
     glDrawPixels(width,height,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
 
-    if (fullscreen || !print_frame_rate)
-    {
-      glMatrixMode( GL_PROJECTION );
-      glPushMatrix();
-      glLoadIdentity();
-      gluOrtho2D( 0, width, 0, height );
-      glMatrixMode( GL_MODELVIEW );
-      glPushMatrix();
-      glLoadIdentity();
+    ImGui_ImplGlfwGL2_NewFrame();
+    
+    ImGuiWindowFlags window_flags = 0;
+    window_flags |= ImGuiWindowFlags_NoTitleBar;
+    //window_flags |= ImGuiWindowFlags_NoScrollbar;
+    //window_flags |= ImGuiWindowFlags_MenuBar;
+    //window_flags |= ImGuiWindowFlags_NoMove;
+    //window_flags |= ImGuiWindowFlags_NoResize;
+    //window_flags |= ImGuiWindowFlags_NoCollapse;
+    //window_flags |= ImGuiWindowFlags_NoNav;
 
-      /* print frame rate */
-      glColor3f(1.0f, 0.25f, 0.0f);
-
-      std::ostringstream stream;
-      stream.setf(std::ios::fixed, std::ios::floatfield);
-      stream.precision(2);
-
-      stream << 1.0f/avg_render_time.get() << " fps";
-      std::string str = stream.str();
-      glRasterPos2i(6, height - 24);
-      for (size_t i=0; i<str.size(); i++)
-        glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, str[i]);
-
+    //ImGui::GetStyle().WindowBorderSize = 0.0f;
+    //ImGui::SetNextWindowPos(ImVec2(width-200,0));
+    //ImGui::SetNextWindowSize(ImVec2(200,height));
+    ImGui::SetNextWindowBgAlpha(0.3f);
+    ImGui::Begin("Embree", nullptr, window_flags);
+    drawGUI();
+    ImGui::Text("%3.2f fps",1.0f/avg_render_time.get());
 #if defined(RAY_STATS)
-      stream.str("");
-      stream << avg_mrayps.get() << " Mray/s";
-      str = stream.str();
-      glRasterPos2i(6, height - 52);
-      for (size_t i=0; i<str.size(); i++)
-        glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, str[i]);
+    ImGui::Text("%3.2f Mray/s",avg_mrayps.get());
 #endif
+    ImGui::End();
+     
+    //ImGui::ShowDemoWindow();
+        
+    ImGui::Render();
+    ImGui_ImplGlfwGL2_RenderDrawData(ImGui::GetDrawData());
+    
+    glfwSwapBuffers(window);
 
-      glRasterPos2i( 0, 0 );
-      glPopMatrix();
-      glMatrixMode( GL_PROJECTION );
-      glPopMatrix();
-      glMatrixMode( GL_MODELVIEW );
+#ifdef __APPLE__
+    // work around glfw issue #1334
+    // https://github.com/glfw/glfw/issues/1334
+    static bool macMoved = false;
+
+    if (!macMoved) {
+      int x, y;
+      glfwGetWindowPos(window, &x, &y);
+      glfwSetWindowPos(window, ++x, y);
+      macMoved = true;
     }
-
-    glutSwapBuffers();
+#endif
 
     double dt1 = getSeconds()-t0;
     avg_frame_time.add(dt1);
@@ -844,49 +975,22 @@ namespace embree
     } 
   }
 
-  void TutorialApplication::reshapeFunc(int width, int height)
+  void TutorialApplication::reshapeFunc(GLFWwindow* window, int, int)
   {
+    int width,height;
+    glfwGetFramebufferSize(window, &width, &height);
     resize(width,height);
     glViewport(0, 0, width, height);
     this->width = width; this->height = height;
   }
 
-  void TutorialApplication::idleFunc() {
-    glutPostRedisplay();
-  }
-
-  void keyboardFunc(unsigned char key, int x, int y) {
-    TutorialApplication::instance->keyboardFunc(key,x,y);
-  }
-  void keyboardUpFunc(unsigned char key, int x, int y) {
-    TutorialApplication::instance->keyboardUpFunc(key,x,y);
-  }
-  void specialFunc(int key, int x, int y) {
-    TutorialApplication::instance->specialFunc(key,x,y);
-  }
-  void clickFunc(int button, int state, int x, int y) {
-    TutorialApplication::instance->clickFunc(button,state,x,y);
-  }
-  void motionFunc(int x, int y) {
-    TutorialApplication::instance->motionFunc(x,y);
-  }
-  void displayFunc() {
-    TutorialApplication::instance->displayFunc();
-  }
-  void reshapeFunc(int width, int height) {
-    TutorialApplication::instance->reshapeFunc(width,height);
-  }
-  void idleFunc() {
-    TutorialApplication::instance->idleFunc();
-  }
-
   void TutorialApplication::run(int argc, char** argv)
   {
     /* set debug values */
-    //rtcSetDeviceProperty(nullptr,(RTCDeviceProperty) 1000000, debug0);
-    //rtcSetDeviceProperty(nullptr,(RTCDeviceProperty) 1000001, debug1);
-    //rtcSetDeviceProperty(nullptr,(RTCDeviceProperty) 1000002, debug2);
-    //rtcSetDeviceProperty(nullptr,(RTCDeviceProperty) 1000003, debug3);
+    rtcSetDeviceProperty(nullptr,(RTCDeviceProperty) 1000000, debug0);
+    rtcSetDeviceProperty(nullptr,(RTCDeviceProperty) 1000001, debug1);
+    rtcSetDeviceProperty(nullptr,(RTCDeviceProperty) 1000002, debug2);
+    rtcSetDeviceProperty(nullptr,(RTCDeviceProperty) 1000003, debug3);
 
     /* initialize ray tracing core */
     device_init(rtcore.c_str());
@@ -894,21 +998,20 @@ namespace embree
     /* set shader mode */
     switch (shader) {
     case SHADER_DEFAULT  : break;
-    case SHADER_EYELIGHT : device_key_pressed(GLUT_KEY_F2); break;
-    case SHADER_OCCLUSION: device_key_pressed(GLUT_KEY_F3); break;
-    case SHADER_UV       : device_key_pressed(GLUT_KEY_F4); break;
-    case SHADER_TEXCOORDS: device_key_pressed(GLUT_KEY_F8); break;
-    case SHADER_TEXCOORDS_GRID: device_key_pressed(GLUT_KEY_F8); device_key_pressed(GLUT_KEY_F8); break;
-    case SHADER_NG       : device_key_pressed(GLUT_KEY_F5); break;
-    case SHADER_CYCLES   : device_key_pressed(GLUT_KEY_F9); break;
-    case SHADER_GEOMID   : device_key_pressed(GLUT_KEY_F6); break;
-    case SHADER_GEOMID_PRIMID: device_key_pressed(GLUT_KEY_F7); break;
-    case SHADER_AMBIENT_OCCLUSION: device_key_pressed(GLUT_KEY_F11); break;
+    case SHADER_EYELIGHT : device_key_pressed(GLFW_KEY_F2); break;
+    case SHADER_OCCLUSION: device_key_pressed(GLFW_KEY_F3); break;
+    case SHADER_UV       : device_key_pressed(GLFW_KEY_F4); break;
+    case SHADER_TEXCOORDS: device_key_pressed(GLFW_KEY_F8); break;
+    case SHADER_TEXCOORDS_GRID: device_key_pressed(GLFW_KEY_F8); device_key_pressed(GLFW_KEY_F8); break;
+    case SHADER_NG       : device_key_pressed(GLFW_KEY_F5); break;
+    case SHADER_CYCLES   : device_key_pressed(GLFW_KEY_F9); break;
+    case SHADER_GEOMID   : device_key_pressed(GLFW_KEY_F6); break;
+    case SHADER_GEOMID_PRIMID: device_key_pressed(GLFW_KEY_F7); break;
+    case SHADER_AMBIENT_OCCLUSION: device_key_pressed(GLFW_KEY_F11); break;
     };
 
     /* benchmark mode */
-    if (numBenchmarkFrames)
-    {
+    if (numBenchmarkFrames) {
       renderBenchmark();
     }
 
@@ -919,23 +1022,61 @@ namespace embree
     /* interactive mode */
     if (interactive)
     {
-      resize(width,height);
+      window_width = width;
+      window_height = height;
+      glfwSetErrorCallback(errorFunc);
+      glfwInit();
+      glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR,2);
+      glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR,0);
+     
+      if (fullscreen) window = createFullScreenWindow();
+      else            window = createStandardWindow(width,height);
+     
+      glfwMakeContextCurrent(window);
+      glfwSwapInterval(1);
+      reshapeFunc(window,0,0);
 
-      glutInit(&argc, argv);
-      glutInitWindowSize((GLsizei)width, (GLsizei)height);
-      glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
-      glutInitWindowPosition(0, 0);
-      windowID = glutCreateWindow(tutorialName.c_str());
-      if (fullscreen) glutFullScreen();
-      glutDisplayFunc(embree::displayFunc);
-      glutIdleFunc(embree::idleFunc);
-      glutKeyboardFunc(embree::keyboardFunc);
-      glutKeyboardUpFunc(embree::keyboardUpFunc);
-      glutSpecialFunc(embree::specialFunc);
-      glutMouseFunc(embree::clickFunc);
-      glutMotionFunc(embree::motionFunc);
-      glutReshapeFunc(embree::reshapeFunc);
-      glutMainLoop();
+      // Setup ImGui binding
+      ImGui::CreateContext();
+      ImGuiIO& io = ImGui::GetIO(); (void)io;
+      //io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
+      ImGui_ImplGlfwGL2_Init(window, false);
+      
+      // Setup style
+      ImGui::StyleColorsDark();
+      //ImGui::StyleColorsClassic();
+      
+      // Load Fonts
+      // - If no fonts are loaded, dear imgui will use the default font. You can also load multiple fonts and use ImGui::PushFont()/PopFont() to select them. 
+      // - AddFontFromFileTTF() will return the ImFont* so you can store it if you need to select the font among multiple. 
+      // - If the file cannot be loaded, the function will return NULL. Please handle those errors in your application (e.g. use an assertion, or display an error and quit).
+      // - The fonts will be rasterized at a given size (w/ oversampling) and stored into a texture when calling ImFontAtlas::Build()/GetTexDataAsXXXX(), which ImGui_ImplXXXX_NewFrame below will call.
+      // - Read 'misc/fonts/README.txt' for more instructions and details.
+      // - Remember that in C/C++ if you want to include a backslash \ in a string literal you need to write a double backslash \\ !
+      //io.Fonts->AddFontDefault();
+      //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf", 16.0f);
+      //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf", 15.0f);
+      //io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf", 16.0f);
+      //io.Fonts->AddFontFromFileTTF("../../misc/fonts/ProggyTiny.ttf", 10.0f);
+      //ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 18.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
+      //IM_ASSERT(font != NULL);
+      
+      while (!glfwWindowShouldClose(window))
+      {
+        // You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
+        // - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application.
+        // - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application.
+        // Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
+        glfwPollEvents();
+
+        displayFunc();
+      }
+
+      ImGui_ImplGlfwGL2_Shutdown();
+      ImGui::DestroyContext();
+      
+      glfwDestroyWindow(window);
+      glfwTerminate();
     }
   }
 
@@ -947,6 +1088,13 @@ namespace embree
     /* callback */
     postParseCommandLine();
 
+    /* create device */
+    g_device = rtcNewDevice(rtcore.c_str());
+    error_handler(nullptr,rtcGetDeviceError(g_device));
+
+    /* set error handler */
+    rtcSetDeviceErrorFunction(g_device,error_handler,nullptr);
+  
     /* start tutorial */
     run(argc,argv);
     return 0;
@@ -973,6 +1121,15 @@ namespace embree
       std::cout << "Error: " << e.what() << std::endl;
     }
 
+    /* create device */
+    g_device = rtcNewDevice(rtcore.c_str());
+    error_handler(nullptr,rtcGetDeviceError(g_device));
+
+    /* set error handler */
+    rtcSetDeviceErrorFunction(g_device,error_handler,nullptr);
+  
+    log(1,"application start");
+    
     /* load scene */
     if (sceneFilename != "")
     {
@@ -982,15 +1139,21 @@ namespace embree
         scene->add(SceneGraph::load(sceneFilename));
     }
 
+    Application::instance->log(1,"loading scene done");
+
     /* load key frames for animation */
-    for (size_t i=0;i<keyFramesFilenames.size();i++)
+    for (size_t i=0; i<keyFramesFilenames.size(); i++)
     {
-      std::cout << "Adding ["<< keyFramesFilenames[i] << "] to scene..." << std::flush;
+      if (verbosity >= 1) 
+        std::cout << "Adding ["<< keyFramesFilenames[i] << "] to scene..." << std::flush;
+      
       if (toLowerCase(keyFramesFilenames[i].ext()) == std::string("obj"))
         scene->add(loadOBJ(keyFramesFilenames[i],subdiv_mode != "",true));
       else if (keyFramesFilenames[i].ext() != "")
         scene->add(SceneGraph::load(keyFramesFilenames[i]));
-      std::cout << "done" << std::endl << std::flush;
+      
+      if (verbosity >= 1) 
+        std::cout << " [DONE]" << std::endl << std::flush;
     }
 
     /* clear texture cache */
@@ -1001,16 +1164,56 @@ namespace embree
     if (remove_non_mblur) scene->remove_mblur(false);
 
     /* perform conversions */
-    if (convert_tris_to_quads    ) scene->triangles_to_quads(convert_tris_to_quads_prop);
-    if (convert_bezier_to_lines  ) scene->bezier_to_lines();
-    if (convert_hair_to_curves   ) scene->hair_to_curves();
-    if (convert_bezier_to_bspline) scene->bezier_to_bspline();
-    if (convert_bspline_to_bezier) scene->bspline_to_bezier();
+    if (sgop.size() && verbosity >= 1) {
+      std::cout << std::endl;
+      std::cout << "scene statistics (pre-convert):" << std::endl;
+      SceneGraph::calculateStatistics(scene.dynamicCast<SceneGraph::Node>()).print();
+      std::cout << std::endl;
+    }
 
+    /* perform scene graph conversions */
+    for (auto& op : sgop)
+    {
+      switch (op) {
+      case CONVERT_TRIANGLES_TO_QUADS   : scene->triangles_to_quads(convert_tris_to_quads_prop); break;
+      case CONVERT_BEZIER_TO_LINES      : scene->bezier_to_lines(); break;
+      case CONVERT_BEZIER_TO_BSPLINE    : scene->bezier_to_bspline(); break;
+      case CONVERT_BSPLINE_TO_BEZIER    : scene->bspline_to_bezier(); break;
+      case CONVERT_BEZIER_TO_HERMITE    : scene->bezier_to_hermite(); break;
+      case CONVERT_FLAT_TO_ROUND_CURVES : scene->flat_to_round_curves(); break;
+      case CONVERT_ROUND_TO_FLAT_CURVES : scene->round_to_flat_curves(); break;
+      case MERGE_QUADS_TO_GRIDS         : scene->merge_quads_to_grids(); break;
+      case CONVERT_QUADS_TO_GRIDS       : scene->quads_to_grids(grid_resX,grid_resY); break;
+      case CONVERT_GRIDS_TO_QUADS       : scene->grids_to_quads(); break;
+      case CONVERT_MBLUR_TO_NONMBLUR    : convert_mblur_to_nonmblur(scene.dynamicCast<SceneGraph::Node>()); break;
+      default : throw std::runtime_error("unsupported scene graph operation");
+      }
+    }
+    Application::instance->log(1,"converting scene done");
+
+    if (verbosity >= 1) {
+      std::cout << std::endl;
+      std::cout << "scene statistics (pre-flattening):" << std::endl;
+      SceneGraph::calculateStatistics(scene.dynamicCast<SceneGraph::Node>()).print();
+      std::cout << std::endl;
+    }
+    
+    Ref<SceneGraph::GroupNode> flattened_scene = SceneGraph::flatten(scene,instancing_mode);
+    Application::instance->log(1,"flattening scene done");
+
+    if (verbosity >= 1) {
+      std::cout << std::endl;
+      std::cout << "scene statistics (post-flattening):" << std::endl;
+      SceneGraph::calculateStatistics(flattened_scene.dynamicCast<SceneGraph::Node>()).print();
+      std::cout << std::endl;
+    }
+   
     /* convert model */
-    obj_scene.add(SceneGraph::flatten(scene,instancing_mode));
+    obj_scene.add(flattened_scene);
+    flattened_scene = nullptr;
     scene = nullptr;
-
+    Application::instance->log(1,"populating tutorial scene done");
+    
     /* print all cameras */
     if (print_scene_cameras) {
       obj_scene.print_camera_names();
@@ -1031,6 +1234,7 @@ namespace embree
 
     /* send model */
     set_scene(&obj_scene);
+    Application::instance->log(1,"creating ISPC compatible scene done");
 
     /* start tutorial */
     run(argc,argv);
@@ -1069,5 +1273,5 @@ namespace embree
 
   extern "C" void progressEnd() {
     std::cout << "]" << std::endl;
-  }
+}
 }

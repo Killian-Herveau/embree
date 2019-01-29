@@ -105,6 +105,12 @@ def runConfig(config):
     elif (compiler == "ICC18"):
       conf.append("-G \"Visual Studio 12 2013"+ext+"\"")
       conf.append("-T \"Intel C++ Compiler 18.0\"")
+    elif (compiler == "ICC17-VC14"):
+      conf.append("-G \"Visual Studio 14 2015"+ext+"\"")
+      conf.append("-T \"Intel C++ Compiler 17.0\"")
+    elif (compiler == "ICC17-VC12"):
+      conf.append("-G \"Visual Studio 12 2013"+ext+"\"")
+      conf.append("-T \"Intel C++ Compiler 17.0\"")
     elif (compiler == "ICC17"):
       conf.append("-G \"Visual Studio 12 2013"+ext+"\"")
       conf.append("-T \"Intel C++ Compiler 17.0\"")
@@ -121,7 +127,9 @@ def runConfig(config):
       raise ValueError('unknown compiler: ' + compiler + '')
     
   elif OS == "linux":
-    if (compiler == "ICC18"):
+    if (compiler == "ICC19"):
+      conf.append("-D CMAKE_CXX_COMPILER="+nas+"/intel/2019.0/bin/icpc -D CMAKE_C_COMPILER="+nas+"/intel/2019.0/bin/icc")
+    elif (compiler == "ICC18"):
       conf.append("-D CMAKE_CXX_COMPILER="+nas+"/intel/2018.0/bin/icpc -D CMAKE_C_COMPILER="+nas+"/intel/2018.0/bin/icc")
     elif (compiler == "ICC17"):
       conf.append("-D CMAKE_CXX_COMPILER="+nas+"/intel/2017.1/bin/icpc -D CMAKE_C_COMPILER="+nas+"/intel/2017.1/bin/icc")
@@ -204,7 +212,9 @@ def runConfig(config):
       conf.append("-D EMBREE_TASKING_SYSTEM=TBB")
 
       if OS == "linux":
-        if tasking == "TBB2017":
+        if tasking == "TBB2019.2":
+          conf.append("-D EMBREE_TBB_ROOT=/NAS/packages/apps/tbb/tbb-2019.2-linux")
+        elif tasking == "TBB2017":
           conf.append("-D EMBREE_TBB_ROOT=/NAS/packages/apps/tbb/tbb-2017-linux")
         elif tasking == "TBB":
           conf.append("-D EMBREE_TBB_ROOT=/usr")
@@ -212,7 +222,9 @@ def runConfig(config):
           raise ValueError('unknown tasking system: ' + tasking + '')
       
       elif OS == "macosx":
-        if tasking == "TBB2017":
+        if tasking == "TBB2019.2":
+          conf.append("-D EMBREE_TBB_ROOT=/Network/nfs/NAS/packages/apps/tbb/tbb-2019.2-osx")
+        elif tasking == "TBB2017":
           conf.append("-D EMBREE_TBB_ROOT=/Network/nfs/NAS/packages/apps/tbb/tbb-2017-osx")
         elif tasking == "TBB":
           conf.append("-D EMBREE_TBB_ROOT=/opt/local")
@@ -220,16 +232,18 @@ def runConfig(config):
           raise ValueError('unknown tasking system: ' + tasking + '')
       
       elif OS == "windows":
-        if tasking == "TBB2017": 
+        if tasking == "TBB2019.2": 
+          tbb_path = "\\\\sdvis-nas\\NAS\\packages\\apps\\tbb\\tbb-2019.2-windows"
+        elif tasking == "TBB2017": 
           tbb_path = "\\\\sdvis-nas\\NAS\\packages\\apps\\tbb\\tbb-2017-windows"
           conf.append("-D EMBREE_TBB_ROOT="+tbb_path)
         else:
           raise ValueError('unknown tasking system: ' + tasking + '')
 
         if platform == "x64":
-          env.append("set PATH="+tbb_path+"\\bin\\intel64\\vc12;%PATH%")
+          env.append("set PATH="+tbb_path+"\\bin\\intel64\\vc12;"+tbb_path+"\\bin\\intel64\\vc14;%PATH%")
         else:
-          env.append("set PATH="+tbb_path+"\\bin\\ia32\\vc12;%PATH%")
+          env.append("set PATH="+tbb_path+"\\bin\\ia32\\vc12;"+tbb_path+"\\bin\\ia32\\vc14;%PATH%")
 
       else:
         sys.stderr.write("unknown operating system "+OS)
@@ -256,23 +270,30 @@ def runConfig(config):
     conf.append("-D EMBREE_RAY_PACKETS="+config["RAY_PACKETS"])
   if "STAT_COUNTERS" in config:
     conf.append("-D EMBREE_STAT_COUNTERS="+config["STAT_COUNTERS"])
-  if "TRIS" in config:
-    conf.append("-D EMBREE_GEOMETRY_TRIANGLE="+config["TRIS"])
-  if "QUADS" in config:
-    conf.append("-D EMBREE_GEOMETRY_QUAD="+config["QUADS"])
-  if "CURVES" in config:
-    conf.append("-D EMBREE_GEOMETRY_CURVE="+config["CURVES"])
+  if "TRI" in config:
+    conf.append("-D EMBREE_GEOMETRY_TRIANGLE="+config["TRI"])
+  if "QUAD" in config:
+    conf.append("-D EMBREE_GEOMETRY_QUAD="+config["QUAD"])
+  if "GRID" in config:
+    conf.append("-D EMBREE_GEOMETRY_GRID="+config["GRID"])
+  if "CURVE" in config:
+    conf.append("-D EMBREE_GEOMETRY_CURVE="+config["CURVE"])
   if "SUBDIV" in config:
     conf.append("-D EMBREE_GEOMETRY_SUBDIVISION="+config["SUBDIV"])
   if "USERGEOM" in config:
     conf.append("-D EMBREE_GEOMETRY_USER="+config["USERGEOM"])
+  if "INSTANCE" in config:
+    conf.append("-D EMBREE_GEOMETRY_INSTANCE="+config["INSTANCE"])
+  if "POINT" in config:
+    conf.append("-D EMBREE_GEOMETRY_POINT="+config["POINT"])
 
   if "package" in config:
     conf.append("-D EMBREE_TESTING_PACKAGE=ON")
-    conf.append("-D EMBREE_TUTORIALS_IMAGE_MAGICK=OFF")
+    conf.append("-D EMBREE_TUTORIALS_OPENIMAGEIO=OFF")
     conf.append("-D EMBREE_TUTORIALS_LIBJPEG=OFF")
     conf.append("-D EMBREE_TUTORIALS_LIBPNG=OFF")
     if OS == "linux" and config["package"] == "ZIP":
+      conf.append("-D EMBREE_SIGN_FILE=/NAS/packages/apps/signfile/linux/SignFile")
       conf.append("-D EMBREE_INSTALL_DEPENDENCIES=ON")
       conf.append("-D EMBREE_ZIP_MODE=ON")
       conf.append("-D CMAKE_SKIP_INSTALL_RPATH=ON")
@@ -281,12 +302,14 @@ def runConfig(config):
       conf.append("-D CMAKE_INSTALL_DOCDIR=doc")
       conf.append("-D CMAKE_INSTALL_BINDIR=bin")
     elif OS == "linux" and config["package"] == "RPM":
+      conf.append("-D EMBREE_SIGN_FILE=/NAS/packages/apps/signfile/linux/SignFile")
       conf.append("-D EMBREE_INSTALL_DEPENDENCIES=OFF")
       conf.append("-D EMBREE_ZIP_MODE=OFF")
       conf.append("-D CMAKE_SKIP_INSTALL_RPATH=OFF")
       conf.append("-D CMAKE_INSTALL_PREFIX=/usr")
       conf.append("-D EMBREE_TBB_ROOT=/usr")
     elif OS == "macosx" and config["package"] == "ZIP":
+      conf.append("-D EMBREE_SIGN_FILE=/NAS/packages/apps/signfile/mac/SignFile")
       conf.append("-D EMBREE_INSTALL_DEPENDENCIES=ON")
       conf.append("-D EMBREE_ZIP_MODE=ON")
       conf.append("-D CMAKE_SKIP_INSTALL_RPATH=ON")
@@ -296,16 +319,18 @@ def runConfig(config):
       conf.append("-D CMAKE_INSTALL_DOCDIR=doc")
       conf.append("-D CMAKE_INSTALL_BINDIR=bin")
     elif OS == "macosx" and config["package"] == "PKG":
+      conf.append("-D EMBREE_SIGN_FILE=/NAS/packages/apps/signfile/mac/SignFile")
       conf.append("-D EMBREE_INSTALL_DEPENDENCIES=OFF")
       conf.append("-D EMBREE_ZIP_MODE=OFF")
       conf.append("-D CMAKE_SKIP_INSTALL_RPATH=OFF")
       conf.append("-D CMAKE_INSTALL_PREFIX=/opt/local")
       conf.append("-D CMAKE_INSTALL_INCLUDEDIR=include")
       conf.append("-D CMAKE_INSTALL_LIBDIR=lib")
-      conf.append("-D CMAKE_INSTALL_DOCDIR=../../Applications/Embree2/doc")
-      conf.append("-D CMAKE_INSTALL_BINDIR=../../Applications/Embree2/bin")
+      conf.append("-D CMAKE_INSTALL_DOCDIR=../../Applications/Embree3/doc")
+      conf.append("-D CMAKE_INSTALL_BINDIR=../../Applications/Embree3/bin")
       conf.append("-D EMBREE_TBB_ROOT=/opt/local")
     elif OS == "windows" and config["package"] == "ZIP":
+      conf.append("-D EMBREE_SIGN_FILE=\\\\sdvis-nas\\NAS\\packages\\apps\\signfile\\windows\\SignFile.exe")
       conf.append("-D EMBREE_INSTALL_DEPENDENCIES=ON")
       conf.append("-D EMBREE_ZIP_MODE=ON")
       conf.append("-D CMAKE_INSTALL_INCLUDEDIR=include")
@@ -314,6 +339,7 @@ def runConfig(config):
       conf.append("-D CMAKE_INSTALL_DOCDIR=doc")
       conf.append("-D CMAKE_INSTALL_BINDIR=bin")
     elif OS == "windows" and config["package"] == "MSI":
+      conf.append("-D EMBREE_SIGN_FILE=\\\\sdvis-nas\\NAS\\packages\\apps\\signfile\\windows\\SignFile.exe")
       conf.append("-D EMBREE_INSTALL_DEPENDENCIES=ON")
       conf.append("-D EMBREE_ZIP_MODE=OFF")
       conf.append("-D CMAKE_INSTALL_INCLUDEDIR=include")
@@ -375,8 +401,8 @@ def parseCommandLine(argv):
     p = argv[0].split(":")
     if p[0] == "intensity":
       g_intensity = int(p[1])
-    if p[1].startswith('[') and p[1].endswith(']'):
-      g_config[p[0]] = p[1][1:-1].split(',')
+    if p[0] == "isas":
+      g_config["isa"] = p[1].split('-')
     else:
       g_config[p[0]] = p[1]
     parseCommandLine(argv[1:len(argv)])

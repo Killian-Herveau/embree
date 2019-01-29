@@ -28,12 +28,12 @@ namespace embree
 #if defined(EMBREE_LOWEST_ISA)
 
   SubdivMesh::SubdivMesh (Device* device)
-    : Geometry(device,SUBDIV_MESH,0,1), 
+    : Geometry(device,GTY_SUBDIV_MESH,0,1), 
       displFunc(nullptr),
-      displBounds(empty),
       tessellationRate(2.0f),
       numHalfEdges(0),
       faceStartEdge(device,0),
+      halfEdgeFace(device,0),
       invalid_face(device,0),
       commitCounter(0)
   {
@@ -368,8 +368,7 @@ namespace embree
 
   void SubdivMesh::setDisplacementFunction (RTCDisplacementFunctionN func) 
   {
-    this->displFunc   = func;
-    this->displBounds = empty;
+    this->displFunc = func;
   }
 
   void SubdivMesh::setTessellationRate(float N)
@@ -698,9 +697,18 @@ namespace embree
  
     /* calculate start edge of each face */
     faceStartEdge.resize(numFaces());
+    
     if (faceVertices.isModified())
+    {
       numHalfEdges = parallel_prefix_sum(faceVertices,faceStartEdge,numFaces(),0,std::plus<unsigned>());
 
+      /* calculate face of each half edge */
+      halfEdgeFace.resize(numHalfEdges);
+      for (size_t f=0, h=0; f<numFaces(); f++)
+        for (size_t e=0; e<faceVertices[f]; e++)
+          halfEdgeFace[h++] = (unsigned int) f;
+    }
+    
     /* create set with all vertex creases */
     if (vertex_creases.isModified() || vertex_crease_weights.isModified())
       vertexCreaseMap.init(vertex_creases,vertex_crease_weights);
@@ -778,6 +786,49 @@ namespace embree
   {
     initializeHalfEdgeStructures();
     Geometry::commit();
+  }
+
+  unsigned int SubdivMesh::getFirstHalfEdge(unsigned int faceID)
+  {
+    if (faceID >= numFaces())
+      throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "invalid face");
+
+    return faceStartEdge[faceID];
+  }
+
+  unsigned int SubdivMesh::getFace(unsigned int edgeID)
+  {
+    if (edgeID >= numHalfEdges)
+      throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "invalid edge");
+
+    return halfEdgeFace[edgeID];
+  }
+    
+  unsigned int SubdivMesh::getNextHalfEdge(unsigned int edgeID)
+  {
+    if (edgeID >= numHalfEdges)
+      throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "invalid half edge");
+
+    return edgeID + topology[0].halfEdges[edgeID].next_half_edge_ofs;
+  }
+
+  unsigned int SubdivMesh::getPreviousHalfEdge(unsigned int edgeID)
+  {
+     if (edgeID >= numHalfEdges)
+      throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "invalid half edge");
+
+    return edgeID + topology[0].halfEdges[edgeID].prev_half_edge_ofs;
+  }
+
+  unsigned int SubdivMesh::getOppositeHalfEdge(unsigned int topologyID, unsigned int edgeID)
+  {
+    if (topologyID >= topology.size())
+      throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "invalid topology");
+    
+    if (edgeID >= numHalfEdges)
+      throw_RTCError(RTC_ERROR_INVALID_ARGUMENT, "invalid half edge");
+
+    return edgeID + topology[topologyID].halfEdges[edgeID].opposite_half_edge_ofs;
   }
   
 #endif
@@ -910,11 +961,11 @@ namespace embree
         if (valid) valid1 &= vint4::loadu(&valid[i]) == vint4(-1);
         if (none(valid1)) continue;
         
-        const vint4 primID = vint4::loadu(&primIDs[i]);
+        const vuint4 primID = vuint4::loadu(&primIDs[i]);
         const vfloat4 uu = vfloat4::loadu(&u[i]);
         const vfloat4 vv = vfloat4::loadu(&v[i]);
         
-        foreach_unique(valid1,primID,[&](const vbool4& valid1, const int primID)
+        foreach_unique(valid1,primID,[&](const vbool4& valid1, const unsigned int primID)
                        {
                          for (unsigned int j=0; j<valueCount; j+=4) 
                          {

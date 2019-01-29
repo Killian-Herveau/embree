@@ -19,7 +19,7 @@
 #include "scene_triangle_mesh.h"
 #include "scene_user_geometry.h"
 #include "scene_instance.h"
-#include "scene_bezier_curves.h"
+#include "scene_curves.h"
 #include "scene_subdiv_mesh.h"
 
 #include "../subdiv/tessellation_cache.h"
@@ -49,8 +49,7 @@ namespace embree
   static std::map<Device*,size_t> g_cache_size_map;
   static std::map<Device*,size_t> g_num_threads_map;
 
-  Device::Device (const char* cfg, bool singledevice)
-    : State(singledevice)
+  Device::Device (const char* cfg)
   {
     /* check CPU */
     if (!hasISA(ISA)) 
@@ -97,8 +96,6 @@ namespace embree
       State::print();
 
     /* register all algorithms */
-    instance_factory = make_unique(new InstanceFactory(enabled_cpu_features));
-
     bvh4_factory = make_unique(new BVH4Factory(enabled_builder_cpu_features, enabled_cpu_features));
 
 #if defined(EMBREE_TARGET_SIMD8)
@@ -164,6 +161,7 @@ namespace embree
   void Device::print()
   {
     const int cpu_features = getCPUFeatures();
+    std::cout << std::endl;
     std::cout << "Embree Ray Tracing Kernels " << RTC_VERSION_STRING << " (" << RTC_HASH << ")" << std::endl;
     std::cout << "  Compiler  : " << getCompilerName() << std::endl;
     std::cout << "  Build     : ";
@@ -491,6 +489,12 @@ namespace embree
     case RTC_DEVICE_PROPERTY_USER_GEOMETRY_SUPPORTED: return 1;
 #else
     case RTC_DEVICE_PROPERTY_USER_GEOMETRY_SUPPORTED: return 0;
+#endif
+
+#if defined(EMBREE_GEOMETRY_POINT)
+    case RTC_DEVICE_PROPERTY_POINT_GEOMETRY_SUPPORTED: return 1;
+#else
+    case RTC_DEVICE_PROPERTY_POINT_GEOMETRY_SUPPORTED: return 0;
 #endif
 
 #if defined(TASKING_PPL)

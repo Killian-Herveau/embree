@@ -22,7 +22,7 @@ namespace embree
 {
   struct Variant
   {
-    ALIGNED_CLASS
+    ALIGNED_CLASS_(16)
   public:
 
     /*! Determines which kind of value is stored in the variant. */
@@ -214,10 +214,18 @@ namespace embree
 
   class XMLLoader
   {
+    struct SharedState {
+      std::map<std::string,Ref<SceneGraph::MaterialNode> > materialMap;     //!< named materials
+      std::map<Ref<XML>, Ref<SceneGraph::MaterialNode> > materialCache;     //!< map for detecting repeated materials
+      std::map<std::string,Ref<SceneGraph::Node> > sceneMap; 
+      std::map<std::string,std::shared_ptr<Texture>> textureMap;
+    };
+    
   public:
 
     static Ref<SceneGraph::Node> load(const FileName& fileName, const AffineSpace3fa& space);
-    XMLLoader(const FileName& fileName, const AffineSpace3fa& space);
+    static Ref<SceneGraph::Node> load(const FileName& fileName, const AffineSpace3fa& space, SharedState& state);
+    XMLLoader(const FileName& fileName, const AffineSpace3fa& space, SharedState& state);
    ~XMLLoader();
 
   public:
@@ -237,6 +245,7 @@ namespace embree
     
     Ref<SceneGraph::Node> loadTriangleMesh(const Ref<XML>& xml);
     Ref<SceneGraph::Node> loadQuadMesh(const Ref<XML>& xml);
+    Ref<SceneGraph::Node> loadGridMesh(const Ref<XML>& xml);
     Ref<SceneGraph::Node> loadSubdivMesh(const Ref<XML>& xml);
     Ref<SceneGraph::Node> loadBezierCurves(const Ref<XML>& xml, SceneGraph::CurveSubtype subtype); // only for compatibility
     Ref<SceneGraph::Node> loadCurves(const Ref<XML>& xml, RTCGeometryType type);
@@ -284,10 +293,7 @@ namespace embree
     size_t binFileSize;
 
   private:
-    std::map<std::string,Ref<SceneGraph::MaterialNode> > materialMap;     //!< named materials
-    std::map<Ref<XML>, Ref<SceneGraph::MaterialNode> > materialCache;     //!< map for detecting repeated materials
-    std::map<std::string,Ref<SceneGraph::Node> > sceneMap; 
-    std::map<std::string,std::shared_ptr<Texture>> textureMap; 
+    SharedState& state;
 
   private:
     size_t currentNodeID;
@@ -632,7 +638,8 @@ namespace embree
     const AffineSpace3fa space = load<AffineSpace3fa>(xml->child("AffineSpace"));
     const Vec3fa I = load<Vec3f>(xml->child("I"));
     const Vec3fa P = Vec3fa(zero);
-    return new SceneGraph::TransformNode(space, new SceneGraph::LightNode(new SceneGraph::PointLight(P,I)));
+    const Ref<SceneGraph::Light> light = new SceneGraph::PointLight(P,I);
+    return new SceneGraph::LightNode(light->transform(space));
   }
 
   Ref<SceneGraph::Node> XMLLoader::loadSpotLight(const Ref<XML>& xml) 
@@ -643,7 +650,8 @@ namespace embree
     const Vec3fa D = Vec3fa(0,0,1);
     const float angleMin = load<float>(xml->child("angleMin"));
     const float angleMax = load<float>(xml->child("angleMax"));
-    return new SceneGraph::TransformNode(space, new SceneGraph::LightNode(new SceneGraph::SpotLight(P,D,I,angleMin,angleMax)));
+    const Ref<SceneGraph::Light> light = new SceneGraph::SpotLight(P,D,I,angleMin,angleMax);
+    return new SceneGraph::LightNode(light->transform(space));
   }
 
   Ref<SceneGraph::Node> XMLLoader::loadDirectionalLight(const Ref<XML>& xml) 
@@ -651,7 +659,8 @@ namespace embree
     const AffineSpace3fa space = load<AffineSpace3fa>(xml->child("AffineSpace"));
     const Vec3fa E = load<Vec3fa>(xml->child("E"));
     const Vec3fa D = Vec3fa(0,0,1);
-    return new SceneGraph::TransformNode(space, new SceneGraph::LightNode(new SceneGraph::DirectionalLight(D,E)));
+    const Ref<SceneGraph::Light> light = new SceneGraph::DirectionalLight(D,E);
+    return new SceneGraph::LightNode(light->transform(space));
   }
 
   Ref<SceneGraph::Node> XMLLoader::loadDistantLight(const Ref<XML>& xml) 
@@ -660,7 +669,8 @@ namespace embree
     const Vec3fa L = load<Vec3fa>(xml->child("L"));
     const Vec3fa D = Vec3fa(0,0,1);
     const float halfAngle = load<float>(xml->child("halfAngle"));
-    return new SceneGraph::TransformNode(space, new SceneGraph::LightNode(new SceneGraph::DistantLight(D,L,halfAngle)));
+    const Ref<SceneGraph::Light> light = new SceneGraph::DistantLight(D,L,halfAngle);
+    return new SceneGraph::LightNode(light->transform(space));
   }
 
   Ref<SceneGraph::Node> XMLLoader::loadAmbientLight(const Ref<XML>& xml) 
@@ -693,8 +703,8 @@ namespace embree
   std::shared_ptr<Texture> XMLLoader::loadTextureParm(const Ref<XML>& xml)
   {
     const std::string id = xml->parm("id");
-    if (id != "" && textureMap.find(id) != textureMap.end())
-      return textureMap[id];
+    if (id != "" && state.textureMap.find(id) != state.textureMap.end())
+      return state.textureMap[id];
 
     std::shared_ptr<Texture> texture;
     const FileName src = xml->parm("src");
@@ -718,7 +728,7 @@ namespace embree
         THROW_RUNTIME_ERROR("error reading from binary file: "+binFileName.str());
     }
     
-    if (id != "") textureMap[id] = texture;
+    if (id != "") state.textureMap[id] = texture;
     return texture;
   }
   
@@ -766,19 +776,23 @@ namespace embree
   Ref<SceneGraph::MaterialNode> XMLLoader::loadMaterial(const Ref<XML>& xml) 
   {
     const std::string id = xml->parm("id");
-    if (id != "" && materialMap.find(id) != materialMap.end())
-      return materialMap[id];
+    if (id != "" && state.materialMap.find(id) != state.materialMap.end())
+      return state.materialMap[id];
 
+    if (!xml->hasChild("parameters")) {
+      std::cout << "Warning: material " << id << " is not defined" << std::endl;
+      return new MatteMaterial(Vec3fa(0.5f,0.0f,0.0f));
+    }
     Ref<XML> parameters = xml->child("parameters");
-    if (materialCache.find(parameters) != materialCache.end()) {
-      return materialMap[id] = materialCache[parameters];
+    if (state.materialCache.find(parameters) != state.materialCache.end()) {
+      return state.materialMap[id] = state.materialCache[parameters];
     }
 
     std::string type = load<std::string>(xml->child("code")).c_str();
     Parms parms = loadMaterialParms(parameters);
     Ref<SceneGraph::MaterialNode> material = addMaterial(type,parms);
-    materialCache[parameters] = material;
-    return materialMap[id] = material;
+    state.materialCache[parameters] = material;
+    return state.materialMap[id] = material;
   }
 
   Ref<SceneGraph::MaterialNode> XMLLoader::addMaterial(const std::string& type, const Parms& parms) 
@@ -885,7 +899,7 @@ namespace embree
   Ref<SceneGraph::Node> XMLLoader::loadTriangleMesh(const Ref<XML>& xml) 
   {
     Ref<SceneGraph::MaterialNode> material = loadMaterial(xml->child("material"));
-    Ref<SceneGraph::TriangleMeshNode> mesh = new SceneGraph::TriangleMeshNode(material);
+    Ref<SceneGraph::TriangleMeshNode> mesh = new SceneGraph::TriangleMeshNode(material,BBox1f(0,1),0);
 
     if (Ref<XML> animation = xml->childOpt("animated_positions")) {
       for (size_t i=0; i<animation->size(); i++)
@@ -920,15 +934,13 @@ namespace embree
   Ref<SceneGraph::Node> XMLLoader::loadQuadMesh(const Ref<XML>& xml) 
   {
     Ref<SceneGraph::MaterialNode> material = loadMaterial(xml->child("material"));
-    Ref<SceneGraph::QuadMeshNode> mesh = new SceneGraph::QuadMeshNode(material);
+    Ref<SceneGraph::QuadMeshNode> mesh = new SceneGraph::QuadMeshNode(material,BBox1f(0,1),0);
 
     if (Ref<XML> animation = xml->childOpt("animated_positions")) {
       for (size_t i=0; i<animation->size(); i++)
         mesh->positions.push_back(loadVec3faArray(animation->child(i)));
     } else {
-      auto vec = loadVec3faArray(xml->childOpt("normals"));
-      for (size_t i=0; i<mesh->numTimeSteps(); i++)
-        mesh->normals.push_back(vec);
+      mesh->positions.push_back(loadVec3faArray(xml->childOpt("positions")));
     }
 
     if (Ref<XML> animation = xml->childOpt("animated_normals")) {
@@ -951,6 +963,25 @@ namespace embree
     return mesh.dynamicCast<SceneGraph::Node>();
   }
 
+  Ref<SceneGraph::Node> XMLLoader::loadGridMesh(const Ref<XML>& xml) 
+  {
+    Ref<SceneGraph::MaterialNode> material = loadMaterial(xml->child("material"));
+    Ref<SceneGraph::GridMeshNode> mesh = new SceneGraph::GridMeshNode(material,BBox1f(0,1),0);
+
+    if (Ref<XML> animation = xml->childOpt("animated_positions")) {
+      for (size_t i=0; i<animation->size(); i++)
+        mesh->positions.push_back(loadVec3faArray(animation->child(i)));
+    } else {
+      mesh->positions.push_back(loadVec3faArray(xml->childOpt("positions")));
+    }
+
+    std::vector<Vec4i> grids = loadVec4iArray(xml->childOpt("grids"));
+    for (size_t i=0; i<grids.size(); i++) 
+      mesh->grids.push_back(SceneGraph::GridMeshNode::Grid(grids[i].x,grids[i].y,grids[i].z,grids[i].w));
+    mesh->verify();
+    return mesh.dynamicCast<SceneGraph::Node>();
+  }
+
   RTCSubdivisionMode parseSubdivMode(const Ref<XML>& xml)
   {
     std::string subdiv_mode = xml->parm("subdiv_mode");
@@ -966,7 +997,7 @@ namespace embree
   Ref<SceneGraph::Node> XMLLoader::loadSubdivMesh(const Ref<XML>& xml) 
   {
     Ref<SceneGraph::MaterialNode> material = loadMaterial(xml->child("material"));
-    Ref<SceneGraph::SubdivMeshNode> mesh = new SceneGraph::SubdivMeshNode(material);
+    Ref<SceneGraph::SubdivMeshNode> mesh = new SceneGraph::SubdivMeshNode(material,BBox1f(0,1),0);
 
     if (Ref<XML> animation = xml->childOpt("animated_positions")) {
       for (size_t i=0; i<animation->size(); i++)
@@ -1033,7 +1064,7 @@ namespace embree
   {
     Ref<SceneGraph::MaterialNode> material = loadMaterial(xml->child("material"));
     RTCGeometryType type = (subtype == SceneGraph::ROUND_CURVE) ? RTC_GEOMETRY_TYPE_ROUND_BEZIER_CURVE : RTC_GEOMETRY_TYPE_FLAT_BEZIER_CURVE;
-    Ref<SceneGraph::HairSetNode> mesh = new SceneGraph::HairSetNode(type,material);
+    Ref<SceneGraph::HairSetNode> mesh = new SceneGraph::HairSetNode(type,material,BBox1f(0,1),0);
 
     if (Ref<XML> animation = xml->childOpt("animated_positions")) {
       for (size_t i=0; i<animation->size(); i++)
@@ -1062,7 +1093,7 @@ namespace embree
   Ref<SceneGraph::Node> XMLLoader::loadCurves(const Ref<XML>& xml, RTCGeometryType type)
   {
     Ref<SceneGraph::MaterialNode> material = loadMaterial(xml->child("material"));
-    Ref<SceneGraph::HairSetNode> mesh = new SceneGraph::HairSetNode(type,material);
+    Ref<SceneGraph::HairSetNode> mesh = new SceneGraph::HairSetNode(type,material,BBox1f(0,1),0);
 
     if (Ref<XML> animation = xml->childOpt("animated_positions")) {
       for (size_t i=0; i<animation->size(); i++) {
@@ -1072,6 +1103,27 @@ namespace embree
       mesh->positions.push_back(loadVec4fArray(xml->childOpt("positions")));
       if (xml->hasChild("positions2")) {
         mesh->positions.push_back(loadVec4fArray(xml->childOpt("positions2")));
+      }
+    }
+
+    if (Ref<XML> animation = xml->childOpt("animated_normals")) {
+      for (size_t i=0; i<animation->size(); i++) {
+        mesh->normals.push_back(loadVec3faArray(animation->child(i)));
+      }
+    } else if (Ref<XML> normals = xml->childOpt("normals")) {
+      mesh->normals.push_back(loadVec3faArray(normals));
+    }
+
+    if (type == RTC_GEOMETRY_TYPE_FLAT_HERMITE_CURVE ||
+        type == RTC_GEOMETRY_TYPE_ROUND_HERMITE_CURVE ||
+        type == RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_HERMITE_CURVE)
+    {
+      if (Ref<XML> animation = xml->childOpt("animated_tangents")) {
+        for (size_t i=0; i<animation->size(); i++) {
+          mesh->tangents.push_back(loadVec4fArray(animation->child(i)));
+        }
+      } else if (Ref<XML> tangents = xml->childOpt("tangents")) {
+        mesh->tangents.push_back(loadVec4fArray(tangents));
       }
     }
 
@@ -1085,7 +1137,8 @@ namespace embree
     mesh->flags = loadUCharArray(xml->childOpt("flags"));
 
     if (type == RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE ||
-        type == RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE) {
+        type == RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE ||
+        type == RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_BSPLINE_CURVE) {
       for (auto& vertices : mesh->positions)
         fix_bspline_end_points(indices,vertices);
     }
@@ -1100,31 +1153,34 @@ namespace embree
 
   Ref<SceneGraph::Node> XMLLoader::loadTransformNode(const Ref<XML>& xml) 
   {
+    /* parse number of time steps to use for instanced geometry */
+    int time_steps = 1;
+    std::string str_time_steps = xml->parm("time_steps");
+    if (str_time_steps != "") time_steps = max(1,std::stoi(str_time_steps));
+
+    avector<AffineSpace3fa> spaces(time_steps);
     AffineSpace3fa space = load<AffineSpace3fa>(xml->children[0]);
+    for (size_t i=0; i<time_steps; i++) spaces[i] = space;
     
     if (xml->size() == 2)
-      return new SceneGraph::TransformNode(space,loadNode(xml->children[1]));
+      return new SceneGraph::TransformNode(spaces,loadNode(xml->children[1]));
   
     Ref<SceneGraph::GroupNode> group = new SceneGraph::GroupNode;
     for (size_t i=1; i<xml->size(); i++)
       group->add(loadNode(xml->children[i]));
     
-    return new SceneGraph::TransformNode(space,group.dynamicCast<SceneGraph::Node>());
+    return new SceneGraph::TransformNode(spaces,group.dynamicCast<SceneGraph::Node>());
   }
 
   Ref<SceneGraph::Node> XMLLoader::loadMultiTransformNode(const Ref<XML>& xml) 
   {
     avector<AffineSpace3fa> spaces = loadAffineSpace3faArray(xml->children[0]);
-    
-    /* group all provided objects */
-    Ref<SceneGraph::GroupNode> group = new SceneGraph::GroupNode;
-    for (size_t i=1; i<xml->size(); i++)
-      group->add(loadNode(xml->children[i]));
+    Ref<SceneGraph::Node> child = loadNode(xml->children[1]);
     
     /* instantiate the object group with all transformations */
     Ref<SceneGraph::GroupNode> igroup = new SceneGraph::GroupNode;
     for (size_t i=0; i<spaces.size(); i++)
-      igroup->add(new SceneGraph::TransformNode(spaces[i],group.cast<SceneGraph::Node>()));
+      igroup->add(new SceneGraph::TransformNode(spaces[i],child));
     
     return igroup.dynamicCast<SceneGraph::Node>();
   }
@@ -1194,14 +1250,14 @@ namespace embree
       {
         const std::string id = xml->parm("id");
         Ref<SceneGraph::MaterialNode> material = loadMaterial(xml->child(0));
-        materialMap[id] = material;
+        state.materialMap[id] = material;
         material->name = xml->parm("name");
         return nullptr;
       }
       else if (xml->parm("type") == "scene")
       {
         const std::string id = xml->parm("id");
-        sceneMap[id] = loadNode(xml->child(0));
+        state.sceneMap[id] = loadNode(xml->child(0));
         return nullptr;
       }
       else 
@@ -1212,30 +1268,33 @@ namespace embree
       Ref<SceneGraph::Node> node = nullptr;
       const std::string id = xml->parm("id");
       if (xml->name == "extern") 
-        node = sceneMap[id] = SceneGraph::load(path + xml->parm("src"));
+        node = state.sceneMap[id] = SceneGraph::load(path + xml->parm("src"));
+      else if (xml->name == "xml")
+        node = state.sceneMap[id] = XMLLoader::load(path + xml->parm("src"),one,state);
       else if (xml->name == "extern_combine") 
-        node = sceneMap[id] = SceneGraph::load(path + xml->parm("src"),true);
+        node = state.sceneMap[id] = SceneGraph::load(path + xml->parm("src"),true);
       else if (xml->name == "obj"             ) {
         const bool subdiv_mode = xml->parm("subdiv") == "1";
-        node = sceneMap[id] = loadOBJ(path + xml->parm("src"),subdiv_mode);
+        node = state.sceneMap[id] = loadOBJ(path + xml->parm("src"),subdiv_mode);
       }
-      else if (xml->name == "ref"             ) node = sceneMap[id] = sceneMap[xml->parm("id")];
-      else if (xml->name == "PointLight"      ) node = sceneMap[id] = loadPointLight      (xml);
-      else if (xml->name == "SpotLight"       ) node = sceneMap[id] = loadSpotLight       (xml);
-      else if (xml->name == "DirectionalLight") node = sceneMap[id] = loadDirectionalLight(xml);
-      else if (xml->name == "DistantLight"    ) node = sceneMap[id] = loadDistantLight    (xml);
-      else if (xml->name == "AmbientLight"    ) node = sceneMap[id] = loadAmbientLight    (xml);
-      else if (xml->name == "TriangleLight"   ) node = sceneMap[id] = loadTriangleLight   (xml);
-      else if (xml->name == "QuadLight"       ) node = sceneMap[id] = loadQuadLight       (xml);
-      else if (xml->name == "TriangleMesh"    ) node = sceneMap[id] = loadTriangleMesh    (xml);
-      else if (xml->name == "QuadMesh"        ) node = sceneMap[id] = loadQuadMesh        (xml);
-      else if (xml->name == "SubdivisionMesh" ) node = sceneMap[id] = loadSubdivMesh      (xml);
-      else if (xml->name == "Hair"            ) node = sceneMap[id] = loadBezierCurves    (xml,SceneGraph::FLAT_CURVE);
-      else if (xml->name == "LineSegments"    ) node = sceneMap[id] = loadCurves          (xml,RTC_GEOMETRY_TYPE_FLAT_LINEAR_CURVE);
-      else if (xml->name == "BezierHair"      ) node = sceneMap[id] = loadBezierCurves    (xml,SceneGraph::FLAT_CURVE);
-      else if (xml->name == "BSplineHair"     ) node = sceneMap[id] = loadCurves          (xml,RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE);
-      else if (xml->name == "BezierCurves"    ) node = sceneMap[id] = loadBezierCurves    (xml,SceneGraph::ROUND_CURVE);
-      else if (xml->name == "BSplineCurves"   ) node = sceneMap[id] = loadCurves          (xml,RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE);
+      else if (xml->name == "ref"             ) node = state.sceneMap[id] = state.sceneMap[xml->parm("id")];
+      else if (xml->name == "PointLight"      ) node = state.sceneMap[id] = loadPointLight      (xml);
+      else if (xml->name == "SpotLight"       ) node = state.sceneMap[id] = loadSpotLight       (xml);
+      else if (xml->name == "DirectionalLight") node = state.sceneMap[id] = loadDirectionalLight(xml);
+      else if (xml->name == "DistantLight"    ) node = state.sceneMap[id] = loadDistantLight    (xml);
+      else if (xml->name == "AmbientLight"    ) node = state.sceneMap[id] = loadAmbientLight    (xml);
+      else if (xml->name == "TriangleLight"   ) node = state.sceneMap[id] = loadTriangleLight   (xml);
+      else if (xml->name == "QuadLight"       ) node = state.sceneMap[id] = loadQuadLight       (xml);
+      else if (xml->name == "TriangleMesh"    ) node = state.sceneMap[id] = loadTriangleMesh    (xml);
+      else if (xml->name == "QuadMesh"        ) node = state.sceneMap[id] = loadQuadMesh        (xml);
+      else if (xml->name == "GridMesh"        ) node = state.sceneMap[id] = loadGridMesh        (xml);
+      else if (xml->name == "SubdivisionMesh" ) node = state.sceneMap[id] = loadSubdivMesh      (xml);
+      else if (xml->name == "Hair"            ) node = state.sceneMap[id] = loadBezierCurves    (xml,SceneGraph::FLAT_CURVE);
+      else if (xml->name == "LineSegments"    ) node = state.sceneMap[id] = loadCurves          (xml,RTC_GEOMETRY_TYPE_FLAT_LINEAR_CURVE);
+      else if (xml->name == "BezierHair"      ) node = state.sceneMap[id] = loadBezierCurves    (xml,SceneGraph::FLAT_CURVE);
+      else if (xml->name == "BSplineHair"     ) node = state.sceneMap[id] = loadCurves          (xml,RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE);
+      else if (xml->name == "BezierCurves"    ) node = state.sceneMap[id] = loadBezierCurves    (xml,SceneGraph::ROUND_CURVE);
+      else if (xml->name == "BSplineCurves"   ) node = state.sceneMap[id] = loadCurves          (xml,RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE);
       
       else if (xml->name == "Curves")
       {
@@ -1248,42 +1307,62 @@ namespace embree
         }
         else if (str_type == "bezier")
         {
-          if (str_subtype == "ribbon")
+          if (str_subtype == "flat" || str_subtype == "ribbon")
             type = RTC_GEOMETRY_TYPE_FLAT_BEZIER_CURVE;
-          else if (str_subtype == "surface")
+          else if (str_subtype == "round" || str_subtype == "surface")
             type = RTC_GEOMETRY_TYPE_ROUND_BEZIER_CURVE;
+          else if (str_subtype == "normal_oriented")
+            type = RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_BEZIER_CURVE;
           else
             THROW_RUNTIME_ERROR(xml->loc.str()+": unknown curve type: "+str_subtype);
         }
         else if (str_type == "bspline")
         {
-          if (str_subtype == "ribbon")
+          if (str_subtype == "flat" || str_subtype == "ribbon")
             type = RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE;
-          else if (str_subtype == "surface")
+          else if (str_subtype == "round" ||str_subtype == "surface")
             type = RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE;
+          else if (str_subtype == "normal_oriented")
+            type = RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_BSPLINE_CURVE;
+          else
+            THROW_RUNTIME_ERROR(xml->loc.str()+": unknown curve type: "+str_subtype);
+        }
+        else if (str_type == "hermite")
+        {
+          if (str_subtype == "flat" || str_subtype == "ribbon")
+            type = RTC_GEOMETRY_TYPE_FLAT_HERMITE_CURVE;
+          else if (str_subtype == "round" ||str_subtype == "surface")
+            type = RTC_GEOMETRY_TYPE_ROUND_HERMITE_CURVE;
+          else if (str_subtype == "normal_oriented")
+            type = RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_HERMITE_CURVE;
           else
             THROW_RUNTIME_ERROR(xml->loc.str()+": unknown curve type: "+str_subtype);
         }
         else
           THROW_RUNTIME_ERROR(xml->loc.str()+": unknown curve basis: "+str_type);
         
-        node = sceneMap[id] = loadCurves(xml,type);
+        node = state.sceneMap[id] = loadCurves(xml,type);
       }
-      else if (xml->name == "PerspectiveCamera") node = sceneMap[id] = loadPerspectiveCamera(xml);
-      else if (xml->name == "Group"           ) node = sceneMap[id] = loadGroupNode       (xml);
-      else if (xml->name == "Transform"       ) node = sceneMap[id] = loadTransformNode   (xml);
-      else if (xml->name == "MultiTransform"  ) node = sceneMap[id] = loadMultiTransformNode(xml);
-      else if (xml->name == "Transform2"      ) node = sceneMap[id] = loadTransform2Node  (xml);
-      else if (xml->name == "TransformAnimation") node = sceneMap[id] = loadTransformAnimationNode(xml);
-      else if (xml->name == "Animation2"      ) node = sceneMap[id] = loadAnimation2Node  (xml);
-      else if (xml->name == "Animation"       ) node = sceneMap[id] = loadAnimationNode   (xml);
+      else if (xml->name == "PerspectiveCamera") node = state.sceneMap[id] = loadPerspectiveCamera(xml);
+      else if (xml->name == "Group"           ) node = state.sceneMap[id] = loadGroupNode       (xml);
+      else if (xml->name == "Transform"       ) node = state.sceneMap[id] = loadTransformNode   (xml);
+      else if (xml->name == "MultiTransform"  ) node = state.sceneMap[id] = loadMultiTransformNode(xml);
+      else if (xml->name == "Transform2"      ) node = state.sceneMap[id] = loadTransform2Node  (xml);
+      else if (xml->name == "TransformAnimation") node = state.sceneMap[id] = loadTransformAnimationNode(xml);
+      else if (xml->name == "Animation2"      ) node = state.sceneMap[id] = loadAnimation2Node  (xml);
+      else if (xml->name == "Animation"       ) node = state.sceneMap[id] = loadAnimationNode   (xml);
 
-      else if (xml->name == "ConvertTrianglesToQuads") node = sceneMap[id] = convert_triangles_to_quads(loadNode(xml->child(0)),inf);
-      else if (xml->name == "ConvertTrianglesToTrianglesAndQuads") node = sceneMap[id] = convert_triangles_to_quads(loadNode(xml->child(0)),0.5f);
-      else if (xml->name == "ConvertQuadsToSubdivs"  ) node = sceneMap[id] = convert_quads_to_subdivs  (loadNode(xml->child(0)));
-      else if (xml->name == "ConvertBezierToLines"   ) node = sceneMap[id] = convert_bezier_to_lines   (loadNode(xml->child(0)));
-      else if (xml->name == "ConvertHairToCurves"    ) node = sceneMap[id] = convert_hair_to_curves    (loadNode(xml->child(0)));
-      else if (xml->name == "Flatten"                ) node = sceneMap[id] = flatten                   (loadNode(xml->child(0)), SceneGraph::INSTANCING_NONE);
+      else if (xml->name == "ConvertTrianglesToQuads") node = state.sceneMap[id] = convert_triangles_to_quads(loadNode(xml->child(0)),inf);
+      else if (xml->name == "ConvertTrianglesToTrianglesAndQuads") node = state.sceneMap[id] = convert_triangles_to_quads(loadNode(xml->child(0)),0.5f);
+      else if (xml->name == "ConvertQuadsToSubdivs"  ) node = state.sceneMap[id] = convert_quads_to_subdivs  (loadNode(xml->child(0)));
+      else if (xml->name == "ConvertBezierToLines"   ) node = state.sceneMap[id] = convert_bezier_to_lines   (loadNode(xml->child(0)));
+      else if (xml->name == "ConvertHairToCurves"    ) node = state.sceneMap[id] = convert_flat_to_round_curves(loadNode(xml->child(0)));
+      else if (xml->name == "Flatten"                ) node = state.sceneMap[id] = flatten(loadNode(xml->child(0)), SceneGraph::INSTANCING_NONE);
+      else if (xml->name == "TimeRange"              ) {
+        const Vec2f time_range = xml->parm_Vec2f("time");
+        node = state.sceneMap[id] = loadNode(xml->child(0));
+        set_time_range(node,BBox1f(time_range.x,time_range.y));
+      }
 
       else THROW_RUNTIME_ERROR(xml->loc.str()+": unknown tag: "+xml->name);
 
@@ -1308,7 +1387,7 @@ namespace embree
   {
     size_t matid = xml->child("materiallist")->body[0].Int();
     Ref<SceneGraph::MaterialNode> material = id2material.at(matid);
-    Ref<SceneGraph::TriangleMeshNode> mesh = new SceneGraph::TriangleMeshNode(material);
+    Ref<SceneGraph::TriangleMeshNode> mesh = new SceneGraph::TriangleMeshNode(material,BBox1f(0,1),0);
 
     mesh->positions.push_back(loadVec3faArray(xml->childOpt("vertex")));
     mesh->normals.push_back(loadVec3faArray(xml->childOpt("normal")));
@@ -1371,11 +1450,26 @@ namespace embree
   /*******************************************************************************************/
   
 
-  Ref<SceneGraph::Node> XMLLoader::load(const FileName& fileName, const AffineSpace3fa& space) {
-    XMLLoader loader(fileName,space); return loader.root;
+  Ref<SceneGraph::Node> XMLLoader::load(const FileName& fileName, const AffineSpace3fa& space)
+  {
+    //PRINT(fileName.str());
+    SharedState state;
+    XMLLoader loader(fileName,space,state); return loader.root;
   }
 
-  XMLLoader::XMLLoader(const FileName& fileName, const AffineSpace3fa& space) : binFile(nullptr), binFileSize(0), currentNodeID(0)
+  Ref<SceneGraph::Node> XMLLoader::load(const FileName& fileName, const AffineSpace3fa& space, SharedState& state)
+  {
+    if (state.sceneMap.find(fileName) != state.sceneMap.end())
+      return state.sceneMap[fileName];
+
+    //PRINT(fileName.str());
+    XMLLoader loader(fileName,space,state);
+    state.sceneMap[fileName] = loader.root;
+    return loader.root;
+  }
+
+  XMLLoader::XMLLoader(const FileName& fileName, const AffineSpace3fa& space, SharedState& state)
+    : binFile(nullptr), binFileSize(0), state(state), currentNodeID(0)
   {
     path = fileName.path();
     binFileName = fileName.setExt(".bin");

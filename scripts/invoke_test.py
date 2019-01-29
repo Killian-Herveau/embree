@@ -39,7 +39,7 @@ def compareImages(image0,image1,dimage):
   except ValueError:
     print("Error: "+line)
     raise ValueError
-  return error < 0.005
+  return error
 
 def printUsage():
   sys.stderr.write('Usage: ' + sys.argv[0] + ' --name testname --modeldir path --model path/model.ecs --execute executable args\n')
@@ -115,22 +115,26 @@ print(executable)
   
 ret = os.system(executable)
 
-if ret == 0 and model != "":
-  if not compareImages(outImageFileTga,refImageFileTga,diffImageFileTga):
+if ret == 0 and modeldir == "none":
+   sys.stdout.write("WARNING: not comparing to reference image\n");
+
+if ret == 0 and modeldir != "none":
+  diff = compareImages(outImageFileTga,refImageFileTga,diffImageFileTga)
+  if diff > 0.00056:
     
-    if os.path.isfile(outImageFileTga):
-      os.system("convert -quality 98 " + outImageFileTga    + " " + outImageFileJpg)
-      sys.stdout.write("<DartMeasurementFile name=\"Output\"    type=\"image/jpeg\">" + outImageFileJpg + "</DartMeasurementFile>\n");
+#    if os.path.isfile(outImageFileTga):
+#      os.system("convert -quality 98 " + outImageFileTga    + " " + outImageFileJpg)
+#      sys.stdout.write("<DartMeasurementFile name=\"Output\"    type=\"image/jpeg\">" + outImageFileJpg + "</DartMeasurementFile>\n");
       
-    if os.path.isfile(refImageFileTga):
-      os.system("convert -quality 98 " + refImageFileTga + " " + refImageFileJpg)
-      sys.stdout.write("<DartMeasurementFile name=\"Reference\" type=\"image/jpeg\">" + refImageFileJpg + "</DartMeasurementFile>\n");
+#    if os.path.isfile(refImageFileTga):
+#      os.system("convert -quality 98 " + refImageFileTga + " " + refImageFileJpg)
+#      sys.stdout.write("<DartMeasurementFile name=\"Reference\" type=\"image/jpeg\">" + refImageFileJpg + "</DartMeasurementFile>\n");
       
-    if os.path.isfile(diffImageFileTga):
-      os.system("convert -quality 98 " + diffImageFileTga + " " + diffImageFileJpg)
-      sys.stdout.write("<DartMeasurementFile name=\"Difference\" type=\"image/jpeg\">" + diffImageFileJpg + "</DartMeasurementFile>\n");
+#    if os.path.isfile(diffImageFileTga):
+#      os.system("convert -quality 98 " + diffImageFileTga + " " + diffImageFileJpg)
+#      sys.stdout.write("<DartMeasurementFile name=\"Difference\" type=\"image/jpeg\">" + diffImageFileJpg + "</DartMeasurementFile>\n");
       
-    sys.stdout.write(" [failed] [images differ]\n")
+    sys.stdout.write(" [failed] [images differ by %f]\n" % diff)
     sys.exit(2)
 
 if ret == 0:

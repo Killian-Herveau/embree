@@ -77,16 +77,16 @@ namespace embree
       __forceinline PlueckerIntersector1(const Ray& ray, const void* ptr) {}
 
       template<typename UVMapper, typename Epilog>
-        __forceinline bool intersect(Ray& ray,
-                                     const Vec3vf<M>& tri_v0,
-                                     const Vec3vf<M>& tri_v1,
-                                     const Vec3vf<M>& tri_v2,
-                                     const UVMapper& mapUV,
-                                     const Epilog& epilog) const
+      __forceinline bool intersect(Ray& ray,
+                                   const Vec3vf<M>& tri_v0,
+                                   const Vec3vf<M>& tri_v1,
+                                   const Vec3vf<M>& tri_v2,
+                                   const UVMapper& mapUV,
+                                   const Epilog& epilog) const
       {
         /* calculate vertices relative to ray origin */
         const Vec3vf<M> O = Vec3vf<M>(ray.org);
-        const Vec3vf<M> D = Vec3vf<M>(ray.dir);
+	const Vec3vf<M> D = Vec3vf<M>(ray.dir);
         const Vec3vf<M> v0 = tri_v0-O;
         const Vec3vf<M> v1 = tri_v1-O;
         const Vec3vf<M> v2 = tri_v2-O;
@@ -100,13 +100,15 @@ namespace embree
         const vfloat<M> U = dot(cross(e0,v2+v0),D);
         const vfloat<M> V = dot(cross(e1,v0+v1),D);
         const vfloat<M> W = dot(cross(e2,v1+v2),D);
+        const vfloat<M> UVW = U+V+W;
+        const vfloat<M> eps = float(ulp)*abs(UVW);
 #if defined(EMBREE_BACKFACE_CULLING)
         const vfloat<M> maxUVW = max(U,V,W);
-        vbool<M> valid = maxUVW <= 0.0f;
+        vbool<M> valid = maxUVW <= eps;
 #else
         const vfloat<M> minUVW = min(U,V,W);
         const vfloat<M> maxUVW = max(U,V,W);
-        vbool<M> valid = (minUVW >= 0.0f) | (maxUVW <= 0.0f);
+        vbool<M> valid = (minUVW >= -eps) | (maxUVW <= eps);
 #endif
         if (unlikely(none(valid))) return false;
 
@@ -168,13 +170,13 @@ namespace embree
 
       /*! Intersects K rays with one of M triangles. */
       template<typename UVMapper, typename Epilog>
-        __forceinline vbool<K> intersectK(const vbool<K>& valid0,
-                                          RayK<K>& ray,
-                                          const Vec3vf<K>& tri_v0,
-                                          const Vec3vf<K>& tri_v1,
-                                          const Vec3vf<K>& tri_v2,
-                                          const UVMapper& mapUV,
-                                          const Epilog& epilog) const
+      __forceinline vbool<K> intersectK(const vbool<K>& valid0,
+                                        RayK<K>& ray,
+                                        const Vec3vf<K>& tri_v0,
+                                        const Vec3vf<K>& tri_v1,
+                                        const Vec3vf<K>& tri_v2,
+                                        const UVMapper& mapUV,
+                                        const Epilog& epilog) const
       {
         /* calculate vertices relative to ray origin */
         vbool<K> valid = valid0;
@@ -193,13 +195,15 @@ namespace embree
         const vfloat<K> U = dot(Vec3vf<K>(cross(e0,v2+v0)),D);
         const vfloat<K> V = dot(Vec3vf<K>(cross(e1,v0+v1)),D);
         const vfloat<K> W = dot(Vec3vf<K>(cross(e2,v1+v2)),D);
+        const vfloat<K> UVW = U+V+W;
+        const vfloat<K> eps = float(ulp)*abs(UVW);
 #if defined(EMBREE_BACKFACE_CULLING)
         const vfloat<K> maxUVW = max(U,V,W);
-        valid &= maxUVW <= 0.0f;
+        valid &= maxUVW <= eps;
 #else
         const vfloat<K> minUVW = min(U,V,W);
         const vfloat<K> maxUVW = max(U,V,W);
-        valid &= (minUVW >= 0.0f) | (maxUVW <= 0.0f);
+        valid &= (minUVW >= -eps) | (maxUVW <= eps);
 #endif
         if (unlikely(none(valid))) return false;
 
@@ -226,12 +230,12 @@ namespace embree
 
       /*! Intersect k'th ray from ray packet of size K with M triangles. */
       template<typename UVMapper, typename Epilog>
-        __forceinline bool intersect(RayK<K>& ray, size_t k,
-                                     const Vec3vf<M>& tri_v0,
-                                     const Vec3vf<M>& tri_v1,
-                                     const Vec3vf<M>& tri_v2,
-                                     const UVMapper& mapUV,
-                                     const Epilog& epilog) const
+      __forceinline bool intersect(RayK<K>& ray, size_t k,
+                                   const Vec3vf<M>& tri_v0,
+                                   const Vec3vf<M>& tri_v1,
+                                   const Vec3vf<M>& tri_v2,
+                                   const UVMapper& mapUV,
+                                   const Epilog& epilog) const
       {
         /* calculate vertices relative to ray origin */
         const Vec3vf<M> O = broadcast<vfloat<M>>(ray.org,k);
@@ -249,13 +253,15 @@ namespace embree
         const vfloat<M> U = dot(cross(e0,v2+v0),D);
         const vfloat<M> V = dot(cross(e1,v0+v1),D);
         const vfloat<M> W = dot(cross(e2,v1+v2),D);
+        const vfloat<M> UVW = U+V+W;
+        const vfloat<M> eps = float(ulp)*abs(UVW);
 #if defined(EMBREE_BACKFACE_CULLING)
         const vfloat<M> maxUVW = max(U,V,W);
-        vbool<M> valid = maxUVW <= 0.0f;
+        vbool<M> valid = maxUVW <= eps;
 #else
         const vfloat<M> minUVW = min(U,V,W);
         const vfloat<M> maxUVW = max(U,V,W);
-        vbool<M> valid = (minUVW >= 0.0f) | (maxUVW <= 0.0f);
+        vbool<M> valid = (minUVW >= -eps) | (maxUVW <= eps);
 #endif
         if (unlikely(none(valid))) return false;
 

@@ -53,15 +53,19 @@ namespace embree
     __forceinline explicit vint(const vboolf4& a) : v(_mm_castps_si128((__m128)a)) {}
 #endif
 
+    __forceinline vint(long long a, long long b) : v(_mm_set_epi64x(b,a)) {}
+
     ////////////////////////////////////////////////////////////////////////////////
     /// Constants
     ////////////////////////////////////////////////////////////////////////////////
 
-    __forceinline vint(ZeroTy)   : v(_mm_setzero_si128()) {}
-    __forceinline vint(OneTy)    : v(_mm_set_epi32(1, 1, 1, 1)) {}
-    __forceinline vint(PosInfTy) : v(_mm_set_epi32(pos_inf, pos_inf, pos_inf, pos_inf)) {}
-    __forceinline vint(NegInfTy) : v(_mm_set_epi32(neg_inf, neg_inf, neg_inf, neg_inf)) {}
-    __forceinline vint(StepTy)   : v(_mm_set_epi32(3, 2, 1, 0)) {}
+    __forceinline vint(ZeroTy)        : v(_mm_setzero_si128()) {}
+    __forceinline vint(OneTy)         : v(_mm_set_epi32(1, 1, 1, 1)) {}
+    __forceinline vint(PosInfTy)      : v(_mm_set_epi32(pos_inf, pos_inf, pos_inf, pos_inf)) {}
+    __forceinline vint(NegInfTy)      : v(_mm_set_epi32(neg_inf, neg_inf, neg_inf, neg_inf)) {}
+    __forceinline vint(StepTy)        : v(_mm_set_epi32(3, 2, 1, 0)) {}
+    __forceinline vint(ReverseStepTy) : v(_mm_set_epi32(0, 1, 2, 3)) {}
+
     __forceinline vint(TrueTy)   { v = _mm_cmpeq_epi32(v,v); }
     __forceinline vint(UndefinedTy) : v(_mm_castps_si128(_mm_undefined_ps())) {}
 
@@ -104,14 +108,25 @@ namespace embree
     static __forceinline void storeu(const vboolf4& mask, void* ptr, const vint4& i) { storeu(ptr,select(mask,i,loadu(ptr))); }
 #endif
 
+
 #if defined(__SSE4_1__)
     static __forceinline vint4 load(const unsigned char* ptr) {
-      return _mm_cvtepu8_epi32(_mm_load_si128((__m128i*)ptr));
+      return _mm_cvtepu8_epi32(_mm_loadl_epi64((__m128i*)ptr));
     }
 
     static __forceinline vint4 loadu(const unsigned char* ptr) {
-      return  _mm_cvtepu8_epi32(_mm_loadu_si128((__m128i*)ptr));
+      return  _mm_cvtepu8_epi32(_mm_loadl_epi64((__m128i*)ptr));
     }
+#else
+
+    static __forceinline vint4 load(const unsigned char* ptr) {
+      return vint4(ptr[0],ptr[1],ptr[2],ptr[3]);
+    } 
+
+    static __forceinline vint4 loadu(const unsigned char* ptr) {
+      return vint4(ptr[0],ptr[1],ptr[2],ptr[3]);
+    }
+
 #endif
 
     static __forceinline vint4 load(const unsigned short* ptr) {
@@ -223,7 +238,7 @@ namespace embree
 
     friend __forceinline vint4 select(const vboolf4& m, const vint4& t, const vint4& f) {
 #if defined(__AVX512VL__)
-      return _mm_mask_blend_epi32(m, f, t);
+      return _mm_mask_blend_epi32(m, (__m128i)f, (__m128i)t);
 #elif defined(__SSE4_1__)
       return _mm_castps_si128(_mm_blendv_ps(_mm_castsi128_ps(f), _mm_castsi128_ps(t), m)); 
 #else
@@ -439,6 +454,14 @@ namespace embree
 
   __forceinline int toScalar(const vint4& v) { return _mm_cvtsi128_si32(v); }
 
+  __forceinline size_t toSizeT(const vint4& v) { 
+#if defined(__WIN32__) && !defined(__X86_64__) // win32 workaround
+    return toScalar(v);
+#else
+    return _mm_cvtsi128_si64(v); 
+#endif
+  }
+
 #if defined(__AVX512VL__)
 
   __forceinline vint4 permute(const vint4 &a, const vint4 &index) {
@@ -464,11 +487,11 @@ namespace embree
   __forceinline int reduce_max(const vint4& v) { return toScalar(vreduce_max(v)); }
   __forceinline int reduce_add(const vint4& v) { return toScalar(vreduce_add(v)); }
 
-  __forceinline size_t select_min(const vint4& v) { return __bsf(movemask(v == vreduce_min(v))); }
-  __forceinline size_t select_max(const vint4& v) { return __bsf(movemask(v == vreduce_max(v))); }
+  __forceinline size_t select_min(const vint4& v) { return bsf(movemask(v == vreduce_min(v))); }
+  __forceinline size_t select_max(const vint4& v) { return bsf(movemask(v == vreduce_max(v))); }
 
-  __forceinline size_t select_min(const vboolf4& valid, const vint4& v) { const vint4 a = select(valid,v,vint4(pos_inf)); return __bsf(movemask(valid & (a == vreduce_min(a)))); }
-  __forceinline size_t select_max(const vboolf4& valid, const vint4& v) { const vint4 a = select(valid,v,vint4(neg_inf)); return __bsf(movemask(valid & (a == vreduce_max(a)))); }
+  __forceinline size_t select_min(const vboolf4& valid, const vint4& v) { const vint4 a = select(valid,v,vint4(pos_inf)); return bsf(movemask(valid & (a == vreduce_min(a)))); }
+  __forceinline size_t select_max(const vboolf4& valid, const vint4& v) { const vint4 a = select(valid,v,vint4(neg_inf)); return bsf(movemask(valid & (a == vreduce_max(a)))); }
 
 #else
 

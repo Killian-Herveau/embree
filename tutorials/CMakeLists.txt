@@ -30,27 +30,31 @@ IF (WIN32)
     SET(VCVER vc14)
   ENDIF()
 
-  FIND_PATH(GLUT_INCLUDE_DIR NAMES GL/glut.h PATHS common/freeglut/include)
-  FIND_LIBRARY(GLUT_glut_LIBRARY freeglut common/freeglut/${ARCH}/${VCVER})
-  SET(GLUT_LIBRARIES ${GLUT_glut_LIBRARY})
+  FIND_PATH(GLFW_INCLUDE_DIRS NAMES GLFW/glfw3.h PATHS common/glfw/include)
+  FIND_LIBRARY(GLFW_LIBRARY glfw3 common/glfw/${ARCH}/${VCVER})
+  SET(GLFW_STATIC_LIBRARIES ${GLFW_LIBRARY})
   MARK_AS_ADVANCED(
-    GLUT_INCLUDE_DIR
-    GLUT_glut_LIBRARY
+    GLFW_INCLUDE_DIR
+    GLFW_LIBRARY
   )
 
 ELSE (WIN32)
   
-  FIND_PACKAGE(GLUT)
-  IF (NOT GLUT_FOUND)
-    MESSAGE(FATAL_ERROR "GLUT not found! Please either install GLUT or disable EMBREE_TUTORIALS.")
+  FIND_PACKAGE(PkgConfig REQUIRED)
+  PKG_SEARCH_MODULE(GLFW QUIET glfw3)
+  IF (NOT GLFW_FOUND)
+    MESSAGE(FATAL_ERROR "GLFW not found! Please either install GLFW or disable EMBREE_TUTORIALS.")
   ENDIF()
-  
+
+  LINK_DIRECTORIES(${GLFW_LIBRARY_DIRS})
 ENDIF (WIN32)
 
 FIND_PACKAGE(OpenGL)
 IF (NOT OPENGL_FOUND)
   MESSAGE(FATAL_ERROR "OpenGL not found! Please either install OpenGL or disable EMBREE_TUTORIALS.")
 ENDIF()
+
+INCLUDE_DIRECTORIES(${OPENGL_INCLUDE_DIR} ${GLFW_INCLUDE_DIRS})
 
 ADD_SUBDIRECTORY(common)
 
@@ -65,6 +69,7 @@ ADD_SUBDIRECTORY(pathtracer)
 ADD_SUBDIRECTORY(hair_geometry)
 ADD_SUBDIRECTORY(subdivision_geometry)
 ADD_SUBDIRECTORY(displacement_geometry)
+ADD_SUBDIRECTORY(grid_geometry)
 ADD_SUBDIRECTORY(bvh_builder)
 ADD_SUBDIRECTORY(lazy_geometry)
 ADD_SUBDIRECTORY(bvh_access)
@@ -72,6 +77,7 @@ ADD_SUBDIRECTORY(motion_blur_geometry)
 ADD_SUBDIRECTORY(interpolation)
 ADD_SUBDIRECTORY(convert)
 ADD_SUBDIRECTORY(curve_geometry)
+ADD_SUBDIRECTORY(point_geometry)
 ADD_SUBDIRECTORY(buildbench)
 
 IF (EMBREE_RAY_PACKETS)

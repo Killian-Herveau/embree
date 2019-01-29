@@ -44,7 +44,8 @@ namespace embree
     __forceinline vfloat(const __m512& t) { v = t; }
     __forceinline operator __m512() const { return v; }
     __forceinline operator __m256() const { return _mm512_castps512_ps256(v); }
-    
+    __forceinline operator __m128() const { return _mm512_castps512_ps128(v); }
+
     __forceinline vfloat(float f) {
       v = _mm512_set1_ps(f);
     }
@@ -629,25 +630,25 @@ namespace embree
   __forceinline float reduce_max(const vfloat16& v) { return toScalar(vreduce_max(v)); }
  
   __forceinline size_t select_min(const vfloat16& v) { 
-    return __bsf(_mm512_kmov(_mm512_cmp_epi32_mask(_mm512_castps_si512(v),_mm512_castps_si512(vreduce_min(v)),_MM_CMPINT_EQ)));
+    return bsf(_mm512_kmov(_mm512_cmp_epi32_mask(_mm512_castps_si512(v),_mm512_castps_si512(vreduce_min(v)),_MM_CMPINT_EQ)));
   }
 
   __forceinline size_t select_max(const vfloat16& v) { 
-    return __bsf(_mm512_kmov(_mm512_cmp_epi32_mask(_mm512_castps_si512(v),_mm512_castps_si512(vreduce_max(v)),_MM_CMPINT_EQ)));
+    return bsf(_mm512_kmov(_mm512_cmp_epi32_mask(_mm512_castps_si512(v),_mm512_castps_si512(vreduce_max(v)),_MM_CMPINT_EQ)));
   }
 
   __forceinline size_t select_min(const vboolf16& valid, const vfloat16& v) 
   { 
     const vfloat16 a = select(valid,v,vfloat16(pos_inf)); 
     const vbool16 valid_min = valid & (a == vreduce_min(a));
-    return __bsf(movemask(any(valid_min) ? valid_min : valid)); 
+    return bsf(movemask(any(valid_min) ? valid_min : valid)); 
   }
 
   __forceinline size_t select_max(const vboolf16& valid, const vfloat16& v) 
   { 
     const vfloat16 a = select(valid,v,vfloat16(neg_inf)); 
     const vbool16 valid_max = valid & (a == vreduce_max(a));
-    return __bsf(movemask(any(valid_max) ? valid_max : valid)); 
+    return bsf(movemask(any(valid_max) ? valid_max : valid)); 
   }
   
   __forceinline vfloat16 prefix_sum(const vfloat16& a) 

@@ -61,12 +61,13 @@ namespace embree
     /// Constants
     ////////////////////////////////////////////////////////////////////////////////
 
-    __forceinline vint(ZeroTy)   : v(_mm256_setzero_si256()) {}
-    __forceinline vint(OneTy)    : v(_mm256_set_epi32(1,1,1,1,1,1,1,1)) {}
-    __forceinline vint(PosInfTy) : v(_mm256_set_epi32(pos_inf,pos_inf,pos_inf,pos_inf,pos_inf,pos_inf,pos_inf,pos_inf)) {}
-    __forceinline vint(NegInfTy) : v(_mm256_set_epi32(neg_inf,neg_inf,neg_inf,neg_inf,neg_inf,neg_inf,neg_inf,neg_inf)) {}
-    __forceinline vint(StepTy)   : v(_mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0)) {}
-    __forceinline vint(UndefinedTy) : v(_mm256_undefined_si256()) {}
+    __forceinline vint(ZeroTy)        : v(_mm256_setzero_si256()) {}
+    __forceinline vint(OneTy)         : v(_mm256_set_epi32(1,1,1,1,1,1,1,1)) {}
+    __forceinline vint(PosInfTy)      : v(_mm256_set_epi32(pos_inf,pos_inf,pos_inf,pos_inf,pos_inf,pos_inf,pos_inf,pos_inf)) {}
+    __forceinline vint(NegInfTy)      : v(_mm256_set_epi32(neg_inf,neg_inf,neg_inf,neg_inf,neg_inf,neg_inf,neg_inf,neg_inf)) {}
+    __forceinline vint(StepTy)        : v(_mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0)) {}
+    __forceinline vint(ReverseStepTy) : v(_mm256_set_epi32(0, 1, 2, 3, 4, 5, 6, 7)) {}
+    __forceinline vint(UndefinedTy)   : v(_mm256_undefined_si256()) {}
 
     ////////////////////////////////////////////////////////////////////////////////
     /// Loads and Stores
@@ -389,11 +390,11 @@ namespace embree
   __forceinline int reduce_max(const vint8& v) { return toScalar(vreduce_max(v)); }
   __forceinline int reduce_add(const vint8& v) { return toScalar(vreduce_add(v)); }
 
-  __forceinline size_t select_min(const vint8& v) { return __bsf(movemask(v == vreduce_min(v))); }
-  __forceinline size_t select_max(const vint8& v) { return __bsf(movemask(v == vreduce_max(v))); }
+  __forceinline size_t select_min(const vint8& v) { return bsf(movemask(v == vreduce_min(v))); }
+  __forceinline size_t select_max(const vint8& v) { return bsf(movemask(v == vreduce_max(v))); }
 
-  __forceinline size_t select_min(const vboolf8& valid, const vint8& v) { const vint8 a = select(valid,v,vint8(pos_inf)); return __bsf(movemask(valid & (a == vreduce_min(a)))); }
-  __forceinline size_t select_max(const vboolf8& valid, const vint8& v) { const vint8 a = select(valid,v,vint8(neg_inf)); return __bsf(movemask(valid & (a == vreduce_max(a)))); }
+  __forceinline size_t select_min(const vboolf8& valid, const vint8& v) { const vint8 a = select(valid,v,vint8(pos_inf)); return bsf(movemask(valid & (a == vreduce_min(a)))); }
+  __forceinline size_t select_max(const vboolf8& valid, const vint8& v) { const vint8 a = select(valid,v,vint8(neg_inf)); return bsf(movemask(valid & (a == vreduce_max(a)))); }
 
   ////////////////////////////////////////////////////////////////////////////////
   /// Sorting networks

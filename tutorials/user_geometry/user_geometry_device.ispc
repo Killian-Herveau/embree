@@ -19,8 +19,6 @@
 const uniform int numPhi = 5;
 const uniform int numTheta = 2*numPhi;
 
-RTCDevice g_device = NULL;
-
 void renderTileStandardStream(uniform int taskIndex,
                               uniform int threadIndex,
                               uniform int* uniform pixels,
@@ -37,7 +35,7 @@ void renderTileStandardStream(uniform int taskIndex,
 
 struct Instance
 {
-  ALIGNED_STRUCT
+  ALIGNED_STRUCT_(16)
   RTCGeometry geometry;
   RTCScene object;
   uniform int userID;
@@ -276,7 +274,7 @@ void updateInstance (RTCScene scene, uniform Instance* uniform instance)
 
 struct Sphere
 {
-  ALIGNED_STRUCT
+  ALIGNED_STRUCT_(16)
   Vec3f p;                      //!< position of the sphere
   float r;                      //!< radius of the sphere
   RTCGeometry geometry;
@@ -366,7 +364,7 @@ unmasked void sphereIntersectFunc(const RTCIntersectFunctionNArguments* uniform 
       imask = mask ? -1 : 0;
     }
     
-    const Vec3f Ng = ray->org+t0*ray->dir-sphere.p;
+    const Vec3f Ng = ray->org+t1*ray->dir-sphere.p;
     potentialHit.Ng_x = Ng.x;
     potentialHit.Ng_y = Ng.y;
     potentialHit.Ng_z = Ng.z;
@@ -460,7 +458,7 @@ unmasked void sphereOccludedFunc(const RTCOccludedFunctionNArguments* uniform ar
       imask = mask ? -1 : 0;
     }
     
-    const Vec3f Ng = ray->org+t0*ray->dir-sphere.p;
+    const Vec3f Ng = ray->org+t1*ray->dir-sphere.p;
     potentialHit.Ng_x = Ng.x;
     potentialHit.Ng_y = Ng.y;
     potentialHit.Ng_z = Ng.z;
@@ -920,13 +918,6 @@ uniform Vec3f colors[5][4];
 /* called by the C++ code for initialization */
 export void device_init (uniform int8* uniform cfg)
 {
-  /* create new Embree device */
-  g_device = rtcNewDevice(cfg);
-  error_handler(NULL,rtcGetDeviceError(g_device));
-
-  /* set error handler */
-  rtcSetDeviceErrorFunction(g_device,error_handler,NULL);
-
   /* create scene */
   g_scene = rtcNewScene(g_device);
 
@@ -1176,7 +1167,7 @@ void renderTileStandardStream(uniform int taskIndex,
       shadow.tnear = mask ? 0.001f       : (float)(pos_inf);
       shadow.tfar  = mask ? (float)(inf) : (float)(neg_inf);
     }
-    init_Ray(shadow,primary.org + primary.tfar*primary.dir, neg(lightDir), shadow.tnear, shadow.tfar, 0.0f, N*programCount + programIndex);
+    init_Ray(shadow,primary.org + 0.999f*primary.tfar*primary.dir, neg(lightDir), shadow.tnear, shadow.tfar, 0.0f, N*programCount + programIndex);
 
     RayStats_addShadowRay(stats);
   }
@@ -1202,7 +1193,7 @@ void renderTileStandardStream(uniform int taskIndex,
     /* calculate shading normal in world space */
     Ray& primary = primary_stream[N];
     Vec3f Ns = primary.Ng;
-    if (primary.instID != RTC_INVALID_GEOMETRY_ID && primary.instID != 4) {
+    if (primary.instID != RTC_INVALID_GEOMETRY_ID) {
       Ns = xfmVector(g_instance[primary.instID]->normal2world,make_Vec3f(Ns));
     }
     Ns = face_forward(primary.dir,normalize(Ns));

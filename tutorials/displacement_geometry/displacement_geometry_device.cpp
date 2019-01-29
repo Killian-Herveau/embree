@@ -23,7 +23,6 @@ namespace embree {
 #define ENABLE_SMOOTH_NORMALS 0
 
 /* scene data */
-RTCDevice g_device = nullptr;
 RTCScene g_scene = nullptr;
 
 /* previous camera position */
@@ -169,13 +168,6 @@ unsigned int addGroundPlane (RTCScene scene_i)
 /* called by the C++ code for initialization */
 extern "C" void device_init (char* cfg)
 {
-  /* create new Embree device */
-  g_device = rtcNewDevice(cfg);
-  error_handler(nullptr,rtcGetDeviceError(g_device));
-
-  /* set error handler */
-  rtcSetDeviceErrorFunction(g_device,error_handler,nullptr);
-
   /* create scene */
   g_scene = rtcNewScene(g_device);
   rtcSetSceneFlags(g_scene,RTC_SCENE_FLAG_ROBUST);
@@ -221,12 +213,12 @@ Vec3fa renderPixelStandard(float x, float y, const ISPCCamera& camera, RayStats&
     if (ray.geomID > 0) {
       Vec3fa dPdu,dPdv;
       unsigned int geomID = ray.geomID; {
-        rtcInterpolate1(g_scene,geomID,ray.primID,ray.u,ray.v,RTC_BUFFER_TYPE_VERTEX,0,nullptr,&dPdu.x,&dPdv.x,3);
+        rtcInterpolate1(rtcGetGeometry(g_scene,geomID),ray.primID,ray.u,ray.v,RTC_BUFFER_TYPE_VERTEX,0,nullptr,&dPdu.x,&dPdv.x,3);
       }
-      Ng = normalize(cross(dPdv,dPdu));
+      Ng = normalize(cross(dPdu,dPdv));
       dPdu = dPdu + Ng*displacement_du(P,dPdu);
       dPdv = dPdv + Ng*displacement_dv(P,dPdv);
-      Ng = normalize(cross(dPdv,dPdu));
+      Ng = normalize(cross(dPdu,dPdv));
     }
 #endif
 
@@ -308,7 +300,6 @@ extern "C" void device_render (int* pixels,
 extern "C" void device_cleanup ()
 {
   rtcReleaseScene (g_scene); g_scene = nullptr;
-  rtcReleaseDevice(g_device); g_device = nullptr;
 }
 
 } // namespace embree

@@ -19,7 +19,6 @@
 namespace embree {
 
 /* scene data */
-RTCDevice g_device = nullptr;
 RTCScene g_scene = nullptr;
 Vec3fa* colors = nullptr;
 
@@ -78,11 +77,7 @@ Vec3fa renderPixelStandard(float x, float y, const ISPCCamera& camera, RayStats&
   
   /* initialize ray */
   Ray2 primary;
-  const Vec3fa vx = camera.xfm.l.vx;
-  const Vec3fa vy = camera.xfm.l.vy;
-  const Vec3fa vz = camera.xfm.l.vz;
-
-  init_Ray(primary.ray,Vec3fa(camera.xfm.p), Vec3fa(normalize(vx*x + vy*y + vz)), 0.0f, inf);
+  init_Ray(primary.ray,Vec3fa(camera.xfm.p), Vec3fa(normalize(x*camera.xfm.l.vx + y*camera.xfm.l.vy + camera.xfm.l.vz)), 0.0f, inf);
   primary.ray.mask = 0; // needs to encode rayID for filter
   primary.transparency = 0.0f;
 
@@ -120,7 +115,7 @@ Vec3fa renderPixelStandard(float x, float y, const ISPCCamera& camera, RayStats&
 
     /* add light contribution */
     if (shadow.ray.tfar >= 0.0f) {
-      Vec3fa Ll = diffuse*shadow.transparency*clamp(-dot((Vec3f)lightDir,normalize(primary.ray.Ng)),0.0f,1.0f);
+      Vec3fa Ll = diffuse*shadow.transparency*clamp(-dot(lightDir,normalize(primary.ray.Ng)),0.0f,1.0f);
       color = color + weight*opacity*Ll;
     }
 
@@ -298,7 +293,7 @@ void occlusionFilter(const RTCFilterFunctionNArguments* args)
   for (unsigned int i=ray2->firstHit; i<ray2->lastHit; i++) {
     unsigned slot= i%HIT_LIST_LENGTH;
     if (ray2->hit_geomIDs[slot] == hit->geomID && ray2->hit_primIDs[slot] == hit->primID) {
-      return;
+      valid[0] = 0; return; // ignore duplicate intersections
     }
   }
   /* store hit in hit list */
@@ -357,7 +352,6 @@ void occlusionFilterN(const RTCFilterFunctionNArguments* args)
 
     /* The occlusion filter function may be called multiple times with
      * the same hit. We remember the last N hits, and skip duplicates. */
-    bool already_hit = false;
     unsigned int ray2_firstHit = gather(ray2->firstHit,sizeof(Ray2),pid,rid);
     unsigned int ray2_lastHit =  gather(ray2->lastHit ,sizeof(Ray2),pid,rid);
     for (unsigned int i=ray2_firstHit; i<ray2_lastHit; i++)
@@ -366,14 +360,10 @@ void occlusionFilterN(const RTCFilterFunctionNArguments* args)
       unsigned int last_geomID = gather(ray2->hit_geomIDs[0],slot,sizeof(Ray2),pid,rid);
       unsigned int last_primID = gather(ray2->hit_primIDs[0],slot,sizeof(Ray2),pid,rid);
       if (last_geomID == hit_geomID && last_primID == hit_primID) {
-        already_hit = true;
-        break;
+        valid[vi] = 0; break; // ignore duplicate intersections
       }
     }
-    if (already_hit) {
-      //valid[vi] = 0;
-      continue;
-    }
+    if (!valid[vi]) continue;
 
     /* store hit in hit list */
     unsigned int slot = ray2_lastHit%HIT_LIST_LENGTH;
@@ -637,7 +627,7 @@ unsigned int addCube (RTCScene scene_i, const Vec3fa& offset, const Vec3fa& scal
   rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3, cube_tri_indices, 0, 3*sizeof(unsigned int), NUM_TRI_FACES);
 
   /* create per-triangle color array */
-  colors = (Vec3fa*) alignedMalloc(12*sizeof(Vec3fa));
+  colors = (Vec3fa*) alignedMalloc(12*sizeof(Vec3fa),16);
   colors[0] = Vec3fa(1,0,0); // left side
   colors[1] = Vec3fa(1,0,0);
   colors[2] = Vec3fa(0,1,0); // right side
@@ -681,7 +671,7 @@ unsigned int addSubdivCube (RTCScene scene_i)
   for (unsigned int i=0; i<NUM_QUAD_INDICES; i++) level[i] = 4;
 
   /* create face color array */
-  colors = (Vec3fa*) alignedMalloc(6*sizeof(Vec3fa));
+  colors = (Vec3fa*) alignedMalloc(6*sizeof(Vec3fa),16);
   colors[0] = Vec3fa(1,0,0); // left side
   colors[1] = Vec3fa(0,1,0); // right side
   colors[2] = Vec3fa(0.5f);  // bottom side
@@ -734,13 +724,6 @@ unsigned int addGroundPlane (RTCScene scene_i)
 /* called by the C++ code for initialization */
 extern "C" void device_init (char* cfg)
 {
-  /* create new Embree device */
-  g_device = rtcNewDevice(cfg);
-  error_handler(nullptr,rtcGetDeviceError(g_device));
-
-  /* set error handler */
-  rtcSetDeviceErrorFunction(g_device,error_handler,nullptr);
-
   /* create scene */
   g_scene = rtcNewScene(g_device);
   rtcSetSceneBuildQuality(g_scene, RTC_BUILD_QUALITY_HIGH); // high quality mode to test if we filter out duplicated intersections
@@ -793,7 +776,6 @@ extern "C" void device_render (int* pixels,
 extern "C" void device_cleanup ()
 {
   rtcReleaseScene (g_scene); g_scene = nullptr;
-  rtcReleaseDevice(g_device); g_device = nullptr;
   alignedFree(colors); colors = nullptr;
 }
 

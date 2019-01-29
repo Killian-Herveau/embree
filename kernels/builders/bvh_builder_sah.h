@@ -21,7 +21,7 @@
 #include "heuristic_openmerge_array.h"
 #include "../../include/embree3/rtcore_builder.h"
 
-#if defined(__AVX512F__)
+#if defined(__AVX512F__) && !defined(__AVX512VL__) // KNL
 #  define NUM_OBJECT_BINS 16
 #  define NUM_SPATIAL_BINS 16
 #else
@@ -33,6 +33,9 @@ namespace embree
 {
   namespace isa
   {
+    MAYBE_UNUSED static const float travCost = 1.0f;
+    MAYBE_UNUSED static const size_t DEFAULT_SINGLE_THREAD_THRESHOLD = 1024;
+
     struct GeneralBVHBuilder
     {
       static const size_t MAX_BRANCHING_FACTOR = 8;        //!< maximum supported BVH branching factor
@@ -53,7 +56,7 @@ namespace embree
         {
           if (RTC_BUILD_ARGUMENTS_HAS(settings,maxBranchingFactor)) branchingFactor = settings.maxBranchingFactor;
           if (RTC_BUILD_ARGUMENTS_HAS(settings,maxDepth          )) maxDepth        = settings.maxDepth;
-          if (RTC_BUILD_ARGUMENTS_HAS(settings,sahBlockSize      )) logBlockSize    = __bsr(settings.sahBlockSize);
+          if (RTC_BUILD_ARGUMENTS_HAS(settings,sahBlockSize      )) logBlockSize    = bsr(settings.sahBlockSize);
           if (RTC_BUILD_ARGUMENTS_HAS(settings,minLeafSize       )) minLeafSize     = settings.minLeafSize;
           if (RTC_BUILD_ARGUMENTS_HAS(settings,maxLeafSize       )) maxLeafSize     = settings.maxLeafSize;
           if (RTC_BUILD_ARGUMENTS_HAS(settings,traversalCost     )) travCost        = settings.traversalCost;
@@ -61,7 +64,7 @@ namespace embree
         }
 
         Settings (size_t sahBlockSize, size_t minLeafSize, size_t maxLeafSize, float travCost, float intCost, size_t singleThreadThreshold, size_t primrefarrayalloc = inf)
-        : branchingFactor(2), maxDepth(32), logBlockSize(__bsr(sahBlockSize)), minLeafSize(minLeafSize), maxLeafSize(maxLeafSize),
+        : branchingFactor(2), maxDepth(32), logBlockSize(bsr(sahBlockSize)), minLeafSize(minLeafSize), maxLeafSize(maxLeafSize),
           travCost(travCost), intCost(intCost), singleThreadThreshold(singleThreadThreshold), primrefarrayalloc(primrefarrayalloc) {}
 
       public:

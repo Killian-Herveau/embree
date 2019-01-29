@@ -63,8 +63,19 @@ namespace embree
     unsigned int id;
   };
 
-  enum ISPCType { TRIANGLE_MESH, SUBDIV_MESH, CURVES, INSTANCE, GROUP, QUAD_MESH };
-  
+  struct ISPCGrid
+  {
+    unsigned int startVtxID;
+    unsigned int lineOffset;
+#if !defined(ISPC)
+    unsigned short resX,resY; // max is a 32k x 32k grid
+#else
+    int16 resX,resY;
+#endif
+  };
+
+  enum ISPCType { TRIANGLE_MESH, SUBDIV_MESH, CURVES, INSTANCE, GROUP, QUAD_MESH, GRID_MESH, POINTS };
+
   struct ISPCGeometry
   {
 #if !defined(ISPC)
@@ -104,7 +115,9 @@ namespace embree
     Vec3fa** normals;       //!< vertex normal array
     Vec2f* texcoords;      //!< vertex texcoord array
     ISPCTriangle* triangles;  //!< list of triangles
-    
+
+    float startTime;
+    float endTime;
     unsigned int numTimeSteps;
     unsigned int numVertices;
     unsigned int numTriangles; 
@@ -128,7 +141,9 @@ namespace embree
     Vec3fa** normals;       //!< vertex normal array
     Vec2f* texcoords;     //!< vertex texcoord array
     ISPCQuad* quads;      //!< list of quads
-    
+
+    float startTime;
+    float endTime;
     unsigned int numTimeSteps;
     unsigned int numVertices;
     unsigned int numQuads;
@@ -165,7 +180,9 @@ namespace embree
     unsigned int* vertex_creases;          //!< indices of vertex creases
     float* vertex_crease_weights; //!< weight for each vertex crease
     unsigned int* face_offsets;
-    
+
+    float startTime;
+    float endTime;
     unsigned int numTimeSteps;
     unsigned int numVertices;
     unsigned int numFaces;
@@ -192,6 +209,8 @@ namespace embree
 
     ISPCGeometry geom;
     Vec3fa** positions;       //!< hair control points (x,y,z,r)
+    Vec3fa** normals;         //!< normal control points (x,y,z,r)
+    Vec3fa** tangents;        //!< tangent control points (x,y,z,r)
     ISPCHair* hairs;          //!< for each hair, index to first control point
 #if !defined(ISPC)
     unsigned char* flags;     //!< end cap flags per segment
@@ -199,12 +218,61 @@ namespace embree
     uint8* flags;             //!< end cap flags per segment
 #endif
     RTCGeometryType type;
+    float startTime;
+    float endTime;
     unsigned int numTimeSteps;
     unsigned int numVertices;
     unsigned int numHairs;
     unsigned int numHairCurves;
     unsigned int tessellation_rate;
   };
+
+  struct ISPCPointSet
+  {
+#if !defined(ISPC)
+    ISPCPointSet (TutorialScene* scene_in, RTCGeometryType type, Ref<SceneGraph::PointSetNode> in);
+    ~ISPCPointSet();
+
+  private:
+    ISPCPointSet (const ISPCPointSet& other) DELETED; // do not implement
+    ISPCPointSet& operator= (const ISPCPointSet& other) DELETED; // do not implement
+
+  public:
+#endif
+
+    ISPCGeometry geom;
+    Vec3fa** positions;       //!< hair control points (x,y,z,r)
+    Vec3fa** normals;         //!< normal control points (x,y,z,r)
+
+    RTCGeometryType type;
+    unsigned int numTimeSteps;
+    unsigned int numVertices;
+  };
+
+  struct ISPCGridMesh
+  {
+#if !defined(ISPC)
+    ISPCGridMesh (TutorialScene* scene_in, Ref<SceneGraph::GridMeshNode> in);
+    ~ISPCGridMesh ();
+
+  private:
+    ISPCGridMesh (const ISPCGridMesh& other) DELETED; // do not implement
+    ISPCGridMesh& operator= (const ISPCGridMesh& other) DELETED; // do not implement
+
+  public:
+#endif
+
+    ISPCGeometry geom;
+    Vec3fa** positions;    //!< vertex position array
+    ISPCGrid* grids;      //!< list of quads
+
+    float startTime;
+    float endTime;
+    unsigned int numTimeSteps;
+    unsigned int numVertices;
+    unsigned int numGrids;
+  };
+
   
   struct ISPCInstance
   {
@@ -220,6 +288,9 @@ namespace embree
 #endif
 
     ISPCGeometry geom;
+    ISPCGeometry* child;
+    float startTime;
+    float endTime;
     unsigned int numTimeSteps;
     AffineSpace3fa* spaces;
   };
@@ -238,7 +309,7 @@ namespace embree
 #endif
     ISPCGeometry geom;
     ISPCGeometry** geometries;
-    size_t numGeometries;
+    unsigned int numGeometries;
   };
   
   struct ISPCScene
@@ -263,9 +334,6 @@ namespace embree
     
     Light** lights;              //!< list of lights
     unsigned int numLights;               //!< number of lights
-
-    RTCScene* geomID_to_scene;
-    ISPCInstance** geomID_to_inst;
   };
 
 #if !defined(ISPC)  

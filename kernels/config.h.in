@@ -25,8 +25,12 @@
 #cmakedefine EMBREE_GEOMETRY_CURVE
 #cmakedefine EMBREE_GEOMETRY_SUBDIVISION
 #cmakedefine EMBREE_GEOMETRY_USER
+#cmakedefine EMBREE_GEOMETRY_INSTANCE
+#cmakedefine EMBREE_GEOMETRY_GRID
+#cmakedefine EMBREE_GEOMETRY_POINT
 #cmakedefine EMBREE_RAY_PACKETS
-#cmakedefine EMBREE_NATIVE_CURVE_BSPLINE
+
+#define EMBREE_CURVE_SELF_INTERSECTION_AVOIDANCE_FACTOR @EMBREE_CURVE_SELF_INTERSECTION_AVOIDANCE_FACTOR@
 
 #if defined(EMBREE_GEOMETRY_TRIANGLE)
   #define IF_ENABLED_TRIS(x) x
@@ -40,7 +44,7 @@
   #define IF_ENABLED_QUADS(x)
 #endif
 
-#if defined(EMBREE_GEOMETRY_CURVE)
+#if defined(EMBREE_GEOMETRY_CURVE) || defined(EMBREE_GEOMETRY_POINT)
   #define IF_ENABLED_CURVES(x) x
 #else
   #define IF_ENABLED_CURVES(x)
@@ -58,6 +62,17 @@
   #define IF_ENABLED_USER(x)
 #endif
 
+#if defined(EMBREE_GEOMETRY_INSTANCE)
+  #define IF_ENABLED_INSTANCE(x) x
+#else
+  #define IF_ENABLED_INSTANCE(x)
+#endif
+
+#if defined(EMBREE_GEOMETRY_GRID)
+  #define IF_ENABLED_GRIDS(x) x
+#else
+  #define IF_ENABLED_GRIDS(x)
+#endif
 
 
 

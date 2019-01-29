@@ -22,7 +22,7 @@ namespace embree
 #if defined(EMBREE_LOWEST_ISA)
 
   TriangleMesh::TriangleMesh (Device* device)
-    : Geometry(device,TRIANGLE_MESH,0,1)
+    : Geometry(device,GTY_TRIANGLE_MESH,0,1)
   {
     vertices.resize(numTimeSteps);
   }
@@ -171,7 +171,7 @@ namespace embree
 
   void TriangleMesh::postCommit() 
   {
-    scene->vertices[geomID] = (int*) vertices0.getPtr();
+    scene->vertices[geomID] = (float*) vertices0.getPtr();
 
     triangles.setModified(false);
     for (auto& buf : vertices)

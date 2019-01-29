@@ -15,9 +15,9 @@
 // ======================================================================== //
 
 #include "../common/math/random_sampler.h"
-#include "../common/math/sampling.h"
 #include "../common/tutorial/tutorial_device.h"
 #include "../common/tutorial/scene_device.h"
+#include "../common/math/sampling.h"
 
 namespace embree {
 
@@ -30,7 +30,6 @@ namespace embree {
 extern "C" ISPCScene* g_ispc_scene;
 
 /* scene data */
-RTCDevice g_device = nullptr;
 RTCScene g_scene   = nullptr;
 Vec3fa* ls_positions = nullptr;
 
@@ -251,7 +250,7 @@ void renderTileStandard(int taskIndex,
   Ray rays[TILE_SIZE_X*TILE_SIZE_Y];
 
   /* generate stream of primary rays */
-  int N = 0;
+  unsigned int N = 0;
   for (unsigned int y=y0; y<y1; y++) for (unsigned int x=x0; x<x1; x++)
   {
     /* ISPC workaround for mask == 0 */
@@ -385,13 +384,6 @@ void device_key_pressed_handler(int key)
 /* called by the C++ code for initialization */
 extern "C" void device_init (char* cfg)
 {
-  /* create new Embree device */
-  g_device = rtcNewDevice(cfg);
-  error_handler(nullptr,rtcGetDeviceError(g_device));
-
-  /* set error handler */
-  rtcSetDeviceErrorFunction(g_device,error_handler,nullptr);
-
   /* create scene */
   g_scene = createScene(g_ispc_scene);
 
@@ -426,7 +418,7 @@ extern "C" void device_render (int* pixels,
 
   if (g_ispc_scene->numLights)
   {
-    if (ls_positions == nullptr) ls_positions = (Vec3fa*) alignedMalloc(g_ispc_scene->numLights*sizeof(Vec3fa));
+    if (ls_positions == nullptr) ls_positions = (Vec3fa*) alignedMalloc(g_ispc_scene->numLights*sizeof(Vec3fa),16);
     DifferentialGeometry dg;
     dg.geomID = 0;
     dg.primID = 0;
@@ -463,7 +455,7 @@ extern "C" void device_render (int* pixels,
 #if ENABLE_ANIM == 1
 
   if (animTime < 0.0f) animTime = getTime();
-  const double atime = (getTime() - animTime) * ANIM_FPS;
+  const float atime = (float)((getTime() - animTime) * ANIM_FPS);
   const unsigned int intpart = (unsigned int)floor(atime);
   const double fracpart = atime - (double)intpart;
   const unsigned int keyFrameID = intpart;
@@ -485,7 +477,6 @@ extern "C" void device_render (int* pixels,
 extern "C" void device_cleanup ()
 {
   rtcReleaseScene (g_scene); g_scene = nullptr;
-  rtcReleaseDevice(g_device); g_device = nullptr;
 }
 
 } // namespace embree

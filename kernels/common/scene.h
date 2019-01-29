@@ -18,15 +18,16 @@
 
 #include "default.h"
 #include "device.h"
+#include "builder.h"
 #include "scene_triangle_mesh.h"
 #include "scene_quad_mesh.h"
 #include "scene_user_geometry.h"
 #include "scene_instance.h"
-#include "scene_geometry_instance.h"
-#include "scene_bezier_curves.h"
+#include "scene_curves.h"
 #include "scene_line_segments.h"
 #include "scene_subdiv_mesh.h"
-
+#include "scene_grid_mesh.h"
+#include "scene_points.h"
 #include "../subdiv/tessellation_cache.h"
 
 #include "acceln.h"
@@ -35,9 +36,9 @@
 namespace embree
 {
   /*! Base class all scenes are derived from */
-  class Scene : public Accel
+  class Scene : public AccelN
   {
-    ALIGNED_CLASS;
+    ALIGNED_CLASS_(16);
 
   public:
     template<typename Ty, bool mblur = false>
@@ -54,7 +55,8 @@ namespace embree
         Geometry* geom = scene->geometries[i].ptr;
         if (geom == nullptr) return nullptr;
         if (!all && !geom->isEnabled()) return nullptr;
-        if (geom->getType() != Ty::geom_type) return nullptr;
+        const size_t mask = geom->getTypeMask() & Ty::geom_type; 
+        if (!(mask)) return nullptr;
         if ((geom->numTimeSteps != 1) != mblur) return nullptr;
         return (Ty*) geom;
       }
@@ -98,6 +100,38 @@ namespace embree
       bool all;
       };
 
+      class Iterator2
+      {
+      public:
+      Iterator2 () {}
+      
+      Iterator2 (Scene* scene, Geometry::GTypeMask typemask, bool mblur) 
+      : scene(scene), typemask(typemask), mblur(mblur) {}
+      
+      __forceinline Geometry* at(const size_t i)
+      {
+        Geometry* geom = scene->geometries[i].ptr;
+        if (geom == nullptr) return nullptr;
+        if (!geom->isEnabled()) return nullptr;
+        if (!(geom->getTypeMask() & typemask)) return nullptr;
+        if ((geom->numTimeSteps != 1) != mblur) return nullptr;
+        return geom;
+      }
+
+      __forceinline Geometry* operator[] (const size_t i) {
+        return at(i);
+      }
+
+      __forceinline size_t size() const {
+        return scene->size();
+      }
+      
+    private:
+      Scene* scene;
+      Geometry::GTypeMask typemask;
+      bool mblur;
+    };
+
   public:
     
     /*! Scene construction */
@@ -113,17 +147,19 @@ namespace embree
 
   public:
     void createTriangleAccel();
-    void createQuadAccel();
     void createTriangleMBAccel();
+    void createQuadAccel();
     void createQuadMBAccel();
     void createHairAccel();
     void createHairMBAccel();
-    void createLineAccel();
-    void createLineMBAccel();
     void createSubdivAccel();
     void createSubdivMBAccel();
     void createUserGeometryAccel();
     void createUserGeometryMBAccel();
+    void createInstanceAccel();
+    void createInstanceMBAccel();
+    void createGridAccel();
+    void createGridMBAccel();
 
     /*! prints statistics about the scene */
     void printStatistics();
@@ -167,13 +203,13 @@ namespace embree
     template<typename Mesh>
       __forceinline       Mesh* get(size_t i)       { 
       assert(i < geometries.size()); 
-      assert(geometries[i]->getType() == Mesh::geom_type);
+      assert(geometries[i]->getTypeMask() & Mesh::geom_type);
       return (Mesh*)geometries[i].ptr; 
     }
     template<typename Mesh>
       __forceinline const Mesh* get(size_t i) const { 
       assert(i < geometries.size()); 
-      assert(geometries[i]->getType() == Mesh::geom_type);
+      assert(geometries[i]->getTypeMask() & Mesh::geom_type);
       return (Mesh*)geometries[i].ptr; 
     }
 
@@ -181,7 +217,7 @@ namespace embree
     __forceinline Mesh* getSafe(size_t i) {
       assert(i < geometries.size());
       if (geometries[i] == null) return nullptr;
-      if (geometries[i]->getType() != Mesh::geom_type) return nullptr;
+      if (!(geometries[i]->getTypeMask() & Mesh::geom_type)) return nullptr;
       else return (Mesh*) geometries[i].ptr;
     }
 
@@ -213,15 +249,18 @@ namespace embree
 
   public:
     IDPool<unsigned,0xFFFFFFFE> id_pool;
-    std::vector<Ref<Geometry>> geometries; //!< list of all user geometries
-    vector<int*> vertices;
+    vector<Ref<Geometry>> geometries; //!< list of all user geometries
+    vector<float*> vertices;
     
   public:
     Device* device;
+
+    /* these are to detect if we need to recreate the acceleration structures */
     bool flags_modified;
+    unsigned int enabled_geometry_types;
+    
     RTCSceneFlags scene_flags;
     RTCBuildQuality quality_flags;
-    AccelN accels;
     MutexSys buildMutex;
     SpinLock geometriesMutex;
     bool is_build;
@@ -258,10 +297,24 @@ namespace embree
     struct GeometryCounts 
     {
       __forceinline GeometryCounts()
-        : numTriangles(0), numQuads(0), numBezierCurves(0), numLineSegments(0), numSubdivPatches(0), numUserGeometries(0) {}
+        : numTriangles(0), numQuads(0), numBezierCurves(0), numLineSegments(0), numSubdivPatches(0), numUserGeometries(0), numInstances(0), numGrids(0), numPoints(0) {}
 
       __forceinline size_t size() const {
-        return numTriangles + numQuads + numBezierCurves + numLineSegments + numSubdivPatches + numUserGeometries;
+        return numTriangles + numQuads + numBezierCurves + numLineSegments + numSubdivPatches + numUserGeometries + numInstances + numGrids + numPoints;
+      }
+
+      __forceinline unsigned int enabledGeometryTypesMask() const
+      {
+        unsigned int mask = 0;
+        if (numTriangles) mask |= 1 << 0;
+        if (numQuads) mask |= 1 << 1;
+        if (numBezierCurves+numLineSegments) mask |= 1 << 2;
+        if (numSubdivPatches) mask |= 1 << 3;
+        if (numUserGeometries) mask |= 1 << 4;
+        if (numInstances) mask |= 1 << 5;
+        if (numGrids) mask |= 1 << 6;
+        if (numPoints) mask |= 1 << 7;
+        return mask;
       }
 
       std::atomic<size_t> numTriangles;             //!< number of enabled triangles
@@ -270,12 +323,17 @@ namespace embree
       std::atomic<size_t> numLineSegments;          //!< number of enabled line segments
       std::atomic<size_t> numSubdivPatches;         //!< number of enabled subdivision patches
       std::atomic<size_t> numUserGeometries;        //!< number of enabled user geometries
+      std::atomic<size_t> numInstances;             //!< number of enabled instances
+      std::atomic<size_t> numGrids;                 //!< number of enabled grid geometries
+      std::atomic<size_t> numPoints;                //!< number of enabled points
     };
+
+     __forceinline unsigned int enabledGeometryTypesMask() const {
+       return (world.enabledGeometryTypesMask() << 8) + worldMB.enabledGeometryTypesMask();
+     }
     
     GeometryCounts world;               //!< counts for non-motion blurred geometry
     GeometryCounts worldMB;             //!< counts for motion blurred geometry
-    GeometryCounts instanced;           //!< instance counts for non-motion blurred geometry
-    GeometryCounts instancedMB;         //!< instance counts for motion blurred geometry
 
     std::atomic<size_t> numSubdivEnableDisableEvents; //!< number of enable/disable calls for any subdiv geometry
 
@@ -284,7 +342,7 @@ namespace embree
     }
 
     template<typename Mesh, bool mblur> __forceinline size_t getNumPrimitives() const;
-
+    
     template<typename Mesh, bool mblur>
     __forceinline unsigned getNumTimeSteps()
     {
@@ -302,12 +360,16 @@ namespace embree
   template<> __forceinline size_t Scene::getNumPrimitives<TriangleMesh,true>() const { return worldMB.numTriangles; }
   template<> __forceinline size_t Scene::getNumPrimitives<QuadMesh,false>() const { return world.numQuads; }
   template<> __forceinline size_t Scene::getNumPrimitives<QuadMesh,true>() const { return worldMB.numQuads; }
-  template<> __forceinline size_t Scene::getNumPrimitives<NativeCurves,false>() const { return world.numBezierCurves; }
-  template<> __forceinline size_t Scene::getNumPrimitives<NativeCurves,true>() const { return worldMB.numBezierCurves; }
+  template<> __forceinline size_t Scene::getNumPrimitives<CurveGeometry,false>() const { return world.numBezierCurves+world.numLineSegments+world.numPoints; }
+  template<> __forceinline size_t Scene::getNumPrimitives<CurveGeometry,true>() const { return worldMB.numBezierCurves+worldMB.numLineSegments+worldMB.numPoints; }
   template<> __forceinline size_t Scene::getNumPrimitives<LineSegments,false>() const { return world.numLineSegments; }
   template<> __forceinline size_t Scene::getNumPrimitives<LineSegments,true>() const { return worldMB.numLineSegments; }
   template<> __forceinline size_t Scene::getNumPrimitives<SubdivMesh,false>() const { return world.numSubdivPatches; }
   template<> __forceinline size_t Scene::getNumPrimitives<SubdivMesh,true>() const { return worldMB.numSubdivPatches; }
-  template<> __forceinline size_t Scene::getNumPrimitives<AccelSet,false>() const { return world.numUserGeometries; }
-  template<> __forceinline size_t Scene::getNumPrimitives<AccelSet,true>() const { return worldMB.numUserGeometries; }
+  template<> __forceinline size_t Scene::getNumPrimitives<UserGeometry,false>() const { return world.numUserGeometries; }
+  template<> __forceinline size_t Scene::getNumPrimitives<UserGeometry,true>() const { return worldMB.numUserGeometries; }
+  template<> __forceinline size_t Scene::getNumPrimitives<Instance,false>() const { return world.numInstances; }
+  template<> __forceinline size_t Scene::getNumPrimitives<Instance,true>() const { return worldMB.numInstances; }
+  template<> __forceinline size_t Scene::getNumPrimitives<GridMesh,false>() const { return world.numGrids; }
+  template<> __forceinline size_t Scene::getNumPrimitives<GridMesh,true>() const { return worldMB.numGrids; }
 }
