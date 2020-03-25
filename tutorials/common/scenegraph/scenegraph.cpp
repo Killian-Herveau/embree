@@ -1,5 +1,5 @@
 // ======================================================================== //
-// Copyright 2009-2018 Intel Corporation                                    //
+// Copyright 2009-2020 Intel Corporation                                    //
 //                                                                          //
 // Licensed under the Apache License, Version 2.0 (the "License");          //
 // you may not use this file except in compliance with the License.         //
@@ -43,6 +43,65 @@ namespace embree
       throw std::runtime_error("unknown scene format: " + filename.ext());
   }
 
+  void tab(std::ostream& cout, int n) {
+    for (int i=0; i<n; i++) cout << "  ";
+  }
+
+  void SceneGraph::PerspectiveCameraNode::print(std::ostream& cout, int depth) {
+    cout << "PerspectiveCameraNode { closed = " << closed << " }" << std::endl;
+  }
+
+  void SceneGraph::TransformNode::print(std::ostream& cout, int depth)
+  {
+    cout << "TransformNode { " << std::endl;
+    tab(cout, depth+1); cout << "closed = " << closed << std::endl;
+    tab(cout, depth+1); cout << "numTimeSteps = " << spaces.size() << std::endl;
+    tab(cout, depth+1); cout << "child = "; child->print(cout,depth+1);
+    tab(cout, depth); cout << "}" << std::endl;
+  }
+
+  void SceneGraph::GroupNode::print(std::ostream& cout, int depth)
+  {
+    cout << "GroupNode { " << std::endl;
+    tab(cout, depth+1); cout << "closed = " << closed << std::endl;
+    for (size_t i=0; i<children.size(); i++) {
+      tab(cout, depth+1); cout << "child" << i << " = "; children[i]->print(cout,depth+1);
+    }
+    tab(cout, depth); cout << "}" << std::endl;
+  }
+
+  void SceneGraph::MaterialNode::print(std::ostream& cout, int depth) {
+    cout << "MaterialNode { closed = " << closed << " }" << std::endl;
+  }
+
+  void SceneGraph::LightNode::print(std::ostream& cout, int depth) {
+    cout << "LightNode { closed = " << closed << " }" << std::endl;
+  }
+
+  void SceneGraph::TriangleMeshNode::print(std::ostream& cout, int depth) {
+    cout << "TriangleMeshNode { closed = " << closed << " }" << std::endl;
+  }
+
+  void SceneGraph::QuadMeshNode::print(std::ostream& cout, int depth) {
+    cout << "QuadMeshNode { closed = " << closed << " }" << std::endl;
+  }
+
+  void SceneGraph::SubdivMeshNode::print(std::ostream& cout, int depth) {
+    cout << "SubdivMeshNode { closed = " << closed << " }" << std::endl;
+  }
+
+  void SceneGraph::HairSetNode::print(std::ostream& cout, int depth) {
+    cout << "HairSetNode { closed = " << closed << " }" << std::endl;
+  }
+
+  void SceneGraph::PointSetNode::print(std::ostream& cout, int depth) {
+    cout << "PointSetNode { closed = " << closed << " }" << std::endl;
+  }
+
+  void SceneGraph::GridMeshNode::print(std::ostream& cout, int depth) {
+    cout << "GridMeshNode { closed = " << closed << " }" << std::endl;
+  }
+    
   void SceneGraph::Node::calculateStatistics(Statistics& stat) {
     indegree++;
   }
@@ -487,6 +546,21 @@ namespace embree
         THROW_RUNTIME_ERROR("tangent array not supported for this geometry type");
     }
 
+    if (type == RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_HERMITE_CURVE)
+    {
+      if (!dnormals.size())
+        THROW_RUNTIME_ERROR("normal derivative array required for oriented hermite curve");
+
+      for (const auto& n : dnormals) 
+        if (n.size() != N) 
+          THROW_RUNTIME_ERROR("incompatible normal derivative array size");
+    }
+    else
+    {
+      if (dnormals.size())
+        THROW_RUNTIME_ERROR("normal derivative array not supported for this geometry type");
+    }
+
     if (type == RTC_GEOMETRY_TYPE_FLAT_LINEAR_CURVE ||
         //type == RTC_GEOMETRY_TYPE_ROUND_LINEAR_CURVE ||
         //type == RTC_GEOMETRY_TYPE_NORMAL_ORIENTED_LINEAR_CURVE ||
@@ -899,6 +973,9 @@ namespace embree
       for (auto P : mesh->positions.back())
         positions1.push_back(P+dP);
       mesh->positions.push_back(std::move(positions1));
+
+      if (mesh->normals.size())
+        mesh->normals.push_back(mesh->normals[0]);
     }
     else if (Ref<SceneGraph::SubdivMeshNode> mesh = node.dynamicCast<SceneGraph::SubdivMeshNode>())
     {
@@ -967,6 +1044,10 @@ namespace embree
         avector<Vec3fa> tpositions(positions.size());
         for (size_t i=0; i<positions.size(); i++) tpositions[i] = positions[i] + motion_vector[t];
         mesh->positions.push_back(std::move(tpositions));
+      }
+      if (mesh->normals.size()) {
+        for (size_t t=1; t<motion_vector.size(); t++)
+          mesh->normals.push_back(mesh->normals[0]);
       }
     }
     else if (Ref<SceneGraph::SubdivMeshNode> mesh = node.dynamicCast<SceneGraph::SubdivMeshNode>())
@@ -1655,6 +1736,7 @@ namespace embree
       if (mesh->positions.size()) mesh->positions.resize(1);
       if (mesh->normals.size())   mesh->normals.resize(1);
       if (mesh->tangents.size())  mesh->tangents.resize(1);
+      if (mesh->dnormals.size())  mesh->dnormals.resize(1);
     }
     else if (Ref<SceneGraph::PointSetNode> mesh = node.dynamicCast<SceneGraph::PointSetNode>()) {
       if (mesh->positions.size()) mesh->positions.resize(1);
@@ -1679,7 +1761,7 @@ namespace embree
     {
        in->calculateInDegree();
        in->calculateClosed(instancing == SceneGraph::INSTANCING_GROUP);
-               
+
       std::vector<Ref<SceneGraph::Node>> geometries;      
       if (instancing != SceneGraph::INSTANCING_NONE) 
       {

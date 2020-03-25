@@ -1,5 +1,5 @@
 // ======================================================================== //
-// Copyright 2009-2018 Intel Corporation                                    //
+// Copyright 2009-2020 Intel Corporation                                    //
 //                                                                          //
 // Licensed under the Apache License, Version 2.0 (the "License");          //
 // you may not use this file except in compliance with the License.         //
@@ -45,7 +45,7 @@ namespace embree
           return;
 #endif
 
-        accel->intersect(ray,prim.primID(),context,reportIntersection1);
+        accel->intersect(ray,prim.geomID(),prim.primID(),context,reportIntersection1);
       }
       
       static __forceinline bool occluded(const Precalculations& pre, Ray& ray, IntersectContext* context, const Primitive& prim)
@@ -57,8 +57,16 @@ namespace embree
           return false;
 #endif
 
-        accel->occluded(ray,prim.primID(),context,&reportOcclusion1);
+        accel->occluded(ray,prim.geomID(),prim.primID(),context,&reportOcclusion1);
         return ray.tfar < 0.0f;
+      }
+      
+      static __forceinline bool pointQuery(PointQuery* query, PointQueryContext* context, const Primitive& prim)
+      {
+        AccelSet* accel = (AccelSet*)context->scene->get(prim.geomID());
+        context->geomID = prim.geomID();
+        context->primID = prim.primID();
+        return accel->pointQuery(query, context);
       }
       
       template<int K>
@@ -94,7 +102,7 @@ namespace embree
         valid &= (ray.mask & accel->mask) != 0;
         if (none(valid)) return;
 #endif
-        accel->intersect(valid,ray,prim.primID(),context,&reportIntersection1);
+        accel->intersect(valid,ray,prim.geomID(),prim.primID(),context,&reportIntersection1);
       }
 
       static __forceinline vbool<K> occluded(const vbool<K>& valid_i, const Precalculations& pre, RayK<K>& ray, IntersectContext* context, const Primitive& prim)
@@ -107,10 +115,10 @@ namespace embree
         valid &= (ray.mask & accel->mask) != 0;
         if (none(valid)) return false;
 #endif
-        accel->occluded(valid,ray,prim.primID(),context,&reportOcclusion1);
+        accel->occluded(valid,ray,prim.geomID(),prim.primID(),context,&reportOcclusion1);
         return ray.tfar < 0.0f;
       }
-
+      
       static __forceinline void intersect(Precalculations& pre, RayHitK<K>& ray, size_t k, IntersectContext* context, const Primitive& prim) {
         intersect(vbool<K>(1<<int(k)),pre,ray,context,prim);
       }

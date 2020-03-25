@@ -1,5 +1,5 @@
 ## ======================================================================== ##
-## Copyright 2009-2018 Intel Corporation                                    ##
+## Copyright 2009-2020 Intel Corporation                                    ##
 ##                                                                          ##
 ## Licensed under the Apache License, Version 2.0 (the "License");          ##
 ## you may not use this file except in compliance with the License.         ##
@@ -64,6 +64,11 @@ ADD_SUBDIRECTORY(dynamic_scene)
 ADD_SUBDIRECTORY(user_geometry)
 ADD_SUBDIRECTORY(viewer)
 ADD_SUBDIRECTORY(instanced_geometry)
+
+if ("${EMBREE_MAX_INSTANCE_LEVEL_COUNT}" GREATER "1")
+  ADD_SUBDIRECTORY(multi_instanced_geometry)
+endif()
+
 ADD_SUBDIRECTORY(intersection_filter)
 ADD_SUBDIRECTORY(pathtracer)
 ADD_SUBDIRECTORY(hair_geometry)
@@ -73,12 +78,19 @@ ADD_SUBDIRECTORY(grid_geometry)
 ADD_SUBDIRECTORY(bvh_builder)
 ADD_SUBDIRECTORY(lazy_geometry)
 ADD_SUBDIRECTORY(bvh_access)
+ADD_SUBDIRECTORY(minimal)
 ADD_SUBDIRECTORY(motion_blur_geometry)
 ADD_SUBDIRECTORY(interpolation)
 ADD_SUBDIRECTORY(convert)
 ADD_SUBDIRECTORY(curve_geometry)
 ADD_SUBDIRECTORY(point_geometry)
 ADD_SUBDIRECTORY(buildbench)
+ADD_SUBDIRECTORY(collide)
+ADD_SUBDIRECTORY(closest_point)
+ADD_SUBDIRECTORY(voronoi)
+ADD_SUBDIRECTORY(next_hit)
+ADD_SUBDIRECTORY(multiscene_geometry)
+ADD_SUBDIRECTORY(quaternion_motion_blur)
 
 IF (EMBREE_RAY_PACKETS)
   ADD_SUBDIRECTORY(viewer_stream)
