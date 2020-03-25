@@ -303,13 +303,12 @@ namespace embree
     
     RTCSceneFlags scene_flags;
     RTCBuildQuality quality_flags;
+    RTCBuildArguments buildArguments;
     MutexSys buildMutex;
     SpinLock geometriesMutex;
     bool is_build;
-  private:
-    bool modified;                   //!< true if scene got modified
-    RTCBuildArguments buildArguments;
-
+  
+    bool modified;                   //!< true if scene got modified    
   public:
     
     /*! global lock step task scheduler */

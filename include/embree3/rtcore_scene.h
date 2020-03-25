@@ -172,9 +172,8 @@ RTC_API void rtcCollide (RTCScene scene0, RTCScene scene1, RTCCollideFunc callba
 /* Helper for easily combining scene flags */
 inline RTCSceneFlags operator|(RTCSceneFlags a, RTCSceneFlags b) {
   return (RTCSceneFlags)((size_t)a | (size_t)b);
+
 }
-
+}
 #endif
-
 RTC_NAMESPACE_END
-
